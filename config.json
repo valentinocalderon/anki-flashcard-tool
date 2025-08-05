@@ -1,0 +1,27 @@
+{
+    "deckName": "Spanish Vocab",
+    "modelName": "Basic",
+    "cardTypes": {
+      "basic": true,
+      "reverse": true,
+      "gender": true,
+      "cloze": true,
+      "conjugation": true,
+      "audio": true
+    },
+    "addTags": ["auto-generated"],
+    "autoAddEnabled": false,
+    "audioOptions": {
+      "preferredSource": "linguarobot",
+      "attachToField": "Front",
+      "cacheAudio": true
+    },
+    "_aiOptions": {
+      "_enabled": false,
+      "_provider": "openai",
+      "_apiKey": "your-api-key-here",
+      "_generateExamples": true,
+      "_rewriteDefinitions": false
+    }
+  }
+  
