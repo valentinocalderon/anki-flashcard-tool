@@ -1,9 +1,19 @@
 import { z } from 'zod';
 
+const conjugationPatternSchema = z.enum(['regular', 'e-ie', 'o-ue', 'e-i', 'u-ue', 'irregular']);
+
+const conjugationClassSchema = z.object({
+  ending: z.enum(['ar', 'er', 'ir']),
+  present: conjugationPatternSchema,
+  preterite: conjugationPatternSchema,
+});
+
 export type Card = {
+  deck: string;
+  kind: 'basic' | 'example' | 'conjugation';
   front: string;
   back: string;
-  tags?: string[];
+  tags: string[];
 };
 
 export type WordInfo = {
@@ -16,9 +26,8 @@ export type WordInfo = {
   conjugations: {
     present?: Record<string, string>;
     preterite?: Record<string, string>;
-    imperfect?: Record<string, string>;
-    future?: Record<string, string>;
   } | null;
+  conjugationClass?: z.infer<typeof conjugationClassSchema> | null;
   error?: string;
 };
 
@@ -33,15 +42,16 @@ export const WordInfoSchema = z.object({
     .object({
       present: z.record(z.string()).optional(),
       preterite: z.record(z.string()).optional(),
-      imperfect: z.record(z.string()).optional(),
-      future: z.record(z.string()).optional(),
     })
     .nullable(),
+  conjugationClass: conjugationClassSchema.nullable().optional(),
   error: z.string().optional()
 });
 
 export const CardSchema = z.object({
+  deck: z.string(),
+  kind: z.enum(['basic', 'example', 'conjugation']),
   front: z.string(),
   back: z.string(),
-  tags: z.array(z.string()).optional(),
+  tags: z.array(z.string()),
 });

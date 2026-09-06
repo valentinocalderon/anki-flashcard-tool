@@ -2,11 +2,8 @@ import { z } from 'zod';
 
 const cardTypesSchema = z.object({
   basic: z.boolean(),
-  reverse: z.boolean(),
-  gender: z.boolean(),
-  cloze: z.boolean(),
-  conjugation: z.boolean(),
-  audio: z.boolean()
+  example: z.boolean(),
+  conjugation: z.boolean()
 });
 
 const audioOptionsSchema = z.object({
@@ -27,9 +24,13 @@ export const configSchema = z.object({
   database: z.object({
     url: z.string()
   }),
-  deckName: z.string(),
   modelName: z.string(),
   cardTypes: cardTypesSchema,
+  tenses: z.array(z.enum(['present', 'preterite'])),
+  decks: z.object({
+    vocab: z.string(),
+    conjugation: z.string()
+  }),
   addTags: z.array(z.string()),
   autoAddEnabled: z.boolean(),
   audioOptions: audioOptionsSchema,
@@ -42,15 +43,16 @@ const config: AppConfig = {
   database: {
     url: 'file:db.sqlite'
   },
-  deckName: 'Spanish Vocab',
   modelName: 'Basic',
   cardTypes: {
     basic: true,
-    reverse: true,
-    gender: true,
-    cloze: true,
-    conjugation: true,
-    audio: true
+    example: true,
+    conjugation: true
+  },
+  tenses: ['present', 'preterite'],
+  decks: {
+    vocab: 'Spanish::Vocab',
+    conjugation: 'Spanish::Conjugation'
   },
   addTags: ['auto-generated'],
   autoAddEnabled: false,

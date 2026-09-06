@@ -1,11 +1,14 @@
 import { z } from 'zod';
+import { openaiLookup } from '@/lib/services/aiLookup';
+import { generateForWords } from '@/lib/services/listGenerationService';
 import { createTRPCRouter, publicProcedure } from '@/server/api/trpc';
-import { FlashcardGenerationService } from '@/lib/services/flashcardGenerationService';
+import { getDb } from '@/server/db';
 
 export const ankiRouter = createTRPCRouter({
-  getWordInfo: publicProcedure
-    .input(z.object({ word: z.string().min(1) }))
-    .query(async ({ input }) => {
-      return await FlashcardGenerationService.generateFlashcard(input.word);
+  generateFromList: publicProcedure
+    .input(z.object({ text: z.string().min(1) }))
+    .mutation(async ({ input }) => {
+      const db = await getDb();
+      return generateForWords(db, input.text, openaiLookup);
     }),
 });

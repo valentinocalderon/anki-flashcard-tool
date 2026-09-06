@@ -10,64 +10,77 @@ export function generateCards(wordInfo: WordInfo): Card[] {
 
   if (config.cardTypes.basic) {
     cards.push({
+      deck: config.decks.vocab,
+      kind: 'basic',
       front: wordInfo.english,
       back: spanishWord,
       tags,
     });
   }
 
-  if (config.cardTypes.reverse) {
-    cards.push({
-      front: spanishWord,
-      back: wordInfo.english,
-      tags,
-    });
-  }
-
-  if (config.cardTypes.gender && wordInfo.article) {
-    cards.push({
-      front: `What is the article of "${wordInfo.spanish}"?`,
-      back: wordInfo.article,
-      tags,
-    });
-  }
-
-  if (config.cardTypes.conjugation && wordInfo.conjugations) {
-    for (const [tense, forms] of Object.entries(wordInfo.conjugations)) {
-      const lines = Object.entries(forms)
-        .map(([pronoun, verb]) => `${pronoun}: ${verb}`)
-        .join('<br>');
-
-      cards.push({
-        front: `Conjugate "${wordInfo.spanish}" in ${tense}`,
-        back: lines,
-        tags,
-      });
-    }
-  }
-
-  if (config.cardTypes.cloze && wordInfo.example) {
-    // Match the Spanish part of the example (before the first parenthesis)
-    const match = new RegExp(`\\b${wordInfo.spanish}\\b`, 'i').exec(wordInfo.example);
+  if (config.cardTypes.example && wordInfo.example) {
+    const escapedWord = wordInfo.spanish.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const wordPattern = new RegExp(`(?<!\\p{L})${escapedWord}(?!\\p{L})`, 'iu');
+    const match = wordPattern.exec(wordInfo.example);
     if (match) {
       const splitIndex = wordInfo.example.indexOf('(');
       const spanishPart = splitIndex !== -1 ? wordInfo.example.slice(0, splitIndex).trim() : wordInfo.example;
       const englishPart = splitIndex !== -1 ? wordInfo.example.slice(splitIndex).trim() : '';
   
-      const blanked = spanishPart.replace(
-        new RegExp(`\\b${wordInfo.spanish}\\b`, 'i'),
-        '____'
-      );
+      const blanked = spanishPart.replace(wordPattern, '____');
   
       cards.push({
+        deck: config.decks.vocab,
+        kind: 'example',
         front: blanked,
-        back: `${wordInfo.spanish} (${wordInfo.english}) ${englishPart}`,
+        back: `${wordInfo.spanish} (${wordInfo.english})${englishPart ? ` ${englishPart}` : ''}`,
         tags,
       });
-  
-      // TODO: split `example` field into `spanishExample` and `englishExample` in WordInfo type
     }
   }
 
   return cards;
+}
+
+export function conjugationCards(
+  wordInfo: WordInfo,
+  cardedKeys: ReadonlySet<string>
+): { cards: Card[]; claimedKeys: string[]; claims: { front: string; key: string }[] } {
+  const config = loadConfig();
+  const cards: Card[] = [];
+  const claimedKeys = new Set<string>();
+  const claims: { front: string; key: string }[] = [];
+  const classification = wordInfo.conjugationClass;
+
+  if (!config.cardTypes.conjugation || !classification || !wordInfo.conjugations) {
+    return { cards, claimedKeys: [], claims };
+  }
+
+  for (const tense of config.tenses) {
+    const forms = wordInfo.conjugations[tense];
+    if (!forms) continue;
+
+    const pattern = classification[tense];
+    const key = `${classification.ending}-${pattern}-${tense}`;
+    if (pattern !== 'irregular' && (cardedKeys.has(key) || claimedKeys.has(key))) continue;
+
+    const label = pattern === 'irregular' ? 'irregular' : `${pattern} -${classification.ending}`;
+    const front = `Conjugate ${wordInfo.spanish} in ${tense} (${label})`;
+    cards.push({
+      deck: config.decks.conjugation,
+      kind: 'conjugation',
+      front,
+      back: Object.entries(forms)
+        .map(([pronoun, form]) => `${pronoun}: ${form}`)
+        .join('<br>'),
+      tags: config.addTags,
+    });
+
+    if (pattern !== 'irregular') {
+      claimedKeys.add(key);
+      claims.push({ front, key });
+    }
+  }
+
+  return { cards, claimedKeys: [...claimedKeys], claims };
 }
