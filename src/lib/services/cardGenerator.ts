@@ -22,17 +22,20 @@ export function generateCards(wordInfo: WordInfo): Card[] {
     const splitIndex = wordInfo.example.indexOf('(');
     const spanishPart = splitIndex !== -1 ? wordInfo.example.slice(0, splitIndex).trim() : wordInfo.example;
     const englishPart = splitIndex !== -1 ? wordInfo.example.slice(splitIndex).trim() : '';
-    const exampleWord = wordInfo.exampleWord ?? wordInfo.spanish;
-    const escapedWord = exampleWord.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const exampleTarget = wordInfo.exampleWord?.trim() ? wordInfo.exampleWord.trim() : wordInfo.spanish;
+    const escapedWord = exampleTarget.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const wordPattern = new RegExp(`(?<!\\p{L})${escapedWord}(?!\\p{L})`, 'giu');
     if (wordPattern.test(spanishPart)) {
       const blanked = spanishPart.replace(wordPattern, '____');
+      const answer = exampleTarget.toLowerCase() === wordInfo.spanish.toLowerCase()
+        ? `${wordInfo.spanish} (${wordInfo.english})`
+        : `${exampleTarget} (${wordInfo.spanish}, ${wordInfo.english})`;
 
       cards.push({
         deck: config.decks.vocab,
         kind: 'example',
         front: blanked,
-        back: `${wordInfo.spanish} (${wordInfo.english})${englishPart ? ` ${englishPart}` : ''}`,
+        back: `${answer}${englishPart ? ` ${englishPart}` : ''}`,
         tags,
       });
     }

@@ -24,7 +24,13 @@ export const configSchema = z.object({
   database: z.object({
     url: z.string()
   }),
-  modelName: z.string(),
+  anki: z.object({
+    url: z.string(),
+    noteTypes: z.object({
+      reversed: z.string(),
+      basic: z.string()
+    })
+  }),
   cardTypes: cardTypesSchema,
   tenses: z.array(z.enum(['present', 'preterite'])),
   decks: z.object({
@@ -43,7 +49,13 @@ const config: AppConfig = {
   database: {
     url: 'file:db.sqlite'
   },
-  modelName: 'Basic',
+  anki: {
+    url: 'http://127.0.0.1:8765',
+    noteTypes: {
+      reversed: 'Basic (and reversed card)',
+      basic: 'Basic'
+    }
+  },
   cardTypes: {
     basic: true,
     example: true,

@@ -113,13 +113,40 @@ test('blanks every case-insensitive match and supports an example without a tran
   });
 });
 
-test('a verb example blanks the conjugated form supplied as exampleWord', () => {
+test('an example form matching spanish ignoring case uses spanish and its translation', () => {
+  expect(generateCards({ ...noun, exampleWord: 'CASA' })[1]).toEqual({
+    deck: 'Spanish::Vocab', kind: 'example', front: 'La ____ es grande.',
+    back: 'casa (house) (The house is big.)', tags: ['auto-generated'],
+  });
+});
+
+test.each([' (I have a dog.)', ''])(
+  'a verb example blanks the conjugated form supplied as exampleWord with translation %j',
+  (translation) => {
+    expect(generateCards({
+      ...noun, english: 'to have', spanish: 'tener', gender: null, article: null, type: 'verb',
+      example: `Tengo un perro.${translation}`, exampleWord: 'Tengo',
+    })[1]).toEqual({
+      deck: 'Spanish::Vocab', kind: 'example', front: '____ un perro.',
+      back: `Tengo (tener, to have)${translation}`, tags: ['auto-generated'],
+    });
+  },
+);
+
+test('a padded exampleWord is trimmed for blanking and the example back', () => {
   expect(generateCards({
     ...noun, english: 'to have', spanish: 'tener', gender: null, article: null, type: 'verb',
-    example: 'Tengo un perro. (I have a dog.)', exampleWord: 'Tengo',
+    example: 'Tengo un perro. (I have a dog.)', exampleWord: '  Tengo  ',
   })[1]).toEqual({
     deck: 'Spanish::Vocab', kind: 'example', front: '____ un perro.',
-    back: 'tener (to have) (I have a dog.)', tags: ['auto-generated'],
+    back: 'Tengo (tener, to have) (I have a dog.)', tags: ['auto-generated'],
+  });
+});
+
+test('an empty exampleWord falls back to spanish for blanking and the example back', () => {
+  expect(generateCards({ ...noun, exampleWord: '' })[1]).toEqual({
+    deck: 'Spanish::Vocab', kind: 'example', front: 'La ____ es grande.',
+    back: 'casa (house) (The house is big.)', tags: ['auto-generated'],
   });
 });
 
@@ -273,15 +300,32 @@ test('config declares the three card kinds, two tenses, and both decks', () => {
   expect(config.cardTypes).toEqual({ basic: true, example: true, conjugation: true });
   expect(config.tenses).toEqual(['present', 'preterite']);
   expect(config.decks).toEqual({ vocab: 'Spanish::Vocab', conjugation: 'Spanish::Conjugation' });
-  expect(config.modelName).toBe('Basic');
   expect(config).not.toHaveProperty('deckName');
   expect(configSchema.parse(config)).toEqual(config);
   expect(configSchema.safeParse({ ...config, tenses: ['future'] }).success).toBe(false);
   expect(configSchema.safeParse({ ...config, decks: { vocab: 'Spanish::Vocab' } }).success).toBe(false);
 });
 
-test('config schema strips the retired deckName field', () => {
-  expect(configSchema.parse({ ...loadConfig(), deckName: 'Legacy deck' })).not.toHaveProperty('deckName');
+test.each(['deckName', 'modelName'])('config schema strips the retired %s field', (field) => {
+  expect(configSchema.parse({ ...loadConfig(), [field]: 'Legacy value' })).not.toHaveProperty(field);
+});
+
+test('config declares the AnkiConnect URL and both required note types', () => {
+  const config = loadConfig();
+  expect(config).toHaveProperty('anki', {
+    url: 'http://127.0.0.1:8765',
+    noteTypes: { reversed: 'Basic (and reversed card)', basic: 'Basic' },
+  });
+  expect(configSchema.parse(config)).toEqual(config);
+});
+
+test.each([
+  undefined,
+  { url: 8765, noteTypes: { reversed: 'Basic (and reversed card)', basic: 'Basic' } },
+  { url: 'http://127.0.0.1:8765', noteTypes: { basic: 'Basic' } },
+  { url: 'http://127.0.0.1:8765', noteTypes: { reversed: 'Basic (and reversed card)' } },
+])('config requires an Anki URL string and both note type names: %j', (anki) => {
+  expect(configSchema.safeParse({ ...loadConfig(), anki }).success).toBe(false);
 });
 
 test('the word schema retains valid classification and accepts legacy and non-verb records', () => {
