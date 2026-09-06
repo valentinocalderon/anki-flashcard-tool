@@ -24,6 +24,9 @@ const aiOptionsSchema = z.object({
 });
 
 export const configSchema = z.object({
+  database: z.object({
+    url: z.string()
+  }),
   deckName: z.string(),
   modelName: z.string(),
   cardTypes: cardTypesSchema,
@@ -36,6 +39,9 @@ export const configSchema = z.object({
 export type AppConfig = z.infer<typeof configSchema>;
 
 const config: AppConfig = {
+  database: {
+    url: 'file:db.sqlite'
+  },
   deckName: 'Spanish Vocab',
   modelName: 'Basic',
   cardTypes: {
