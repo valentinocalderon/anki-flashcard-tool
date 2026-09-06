@@ -1,18 +1,10 @@
 import { eq } from 'drizzle-orm';
-import type { WordInfo } from '@/lib/types';
+import type { WordInfo, WordResult } from '@/lib/types';
 import type { Db } from '@/server/db';
 import { words } from '@/server/db/schema';
 import { conjugationCards, generateCards } from './cardGenerator';
 import { cardedPatternKeys, storeCards } from './cardStore';
 import { cachedLookup, normalizeQuery } from './lookupCache';
-
-export type WordResult = {
-  word: string;
-  status: 'added' | 'exists' | 'error';
-  vocabCards: number;
-  conjugationCards: number;
-  message?: string;
-};
 
 export function parseWordList(text: string): string[] {
   const seen = new Set<string>();

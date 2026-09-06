@@ -19,16 +19,15 @@ export function generateCards(wordInfo: WordInfo): Card[] {
   }
 
   if (config.cardTypes.example && wordInfo.example) {
-    const escapedWord = wordInfo.spanish.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const wordPattern = new RegExp(`(?<!\\p{L})${escapedWord}(?!\\p{L})`, 'iu');
-    const match = wordPattern.exec(wordInfo.example);
-    if (match) {
-      const splitIndex = wordInfo.example.indexOf('(');
-      const spanishPart = splitIndex !== -1 ? wordInfo.example.slice(0, splitIndex).trim() : wordInfo.example;
-      const englishPart = splitIndex !== -1 ? wordInfo.example.slice(splitIndex).trim() : '';
-  
+    const splitIndex = wordInfo.example.indexOf('(');
+    const spanishPart = splitIndex !== -1 ? wordInfo.example.slice(0, splitIndex).trim() : wordInfo.example;
+    const englishPart = splitIndex !== -1 ? wordInfo.example.slice(splitIndex).trim() : '';
+    const exampleWord = wordInfo.exampleWord ?? wordInfo.spanish;
+    const escapedWord = exampleWord.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const wordPattern = new RegExp(`(?<!\\p{L})${escapedWord}(?!\\p{L})`, 'giu');
+    if (wordPattern.test(spanishPart)) {
       const blanked = spanishPart.replace(wordPattern, '____');
-  
+
       cards.push({
         deck: config.decks.vocab,
         kind: 'example',
@@ -45,7 +44,7 @@ export function generateCards(wordInfo: WordInfo): Card[] {
 export function conjugationCards(
   wordInfo: WordInfo,
   cardedKeys: ReadonlySet<string>
-): { cards: Card[]; claimedKeys: string[]; claims: { front: string; key: string }[] } {
+): { cards: Card[]; claims: { front: string; key: string }[] } {
   const config = loadConfig();
   const cards: Card[] = [];
   const claimedKeys = new Set<string>();
@@ -53,7 +52,7 @@ export function conjugationCards(
   const classification = wordInfo.conjugationClass;
 
   if (!config.cardTypes.conjugation || !classification || !wordInfo.conjugations) {
-    return { cards, claimedKeys: [], claims };
+    return { cards, claims };
   }
 
   for (const tense of config.tenses) {
@@ -82,5 +81,5 @@ export function conjugationCards(
     }
   }
 
-  return { cards, claimedKeys: [...claimedKeys], claims };
+  return { cards, claims };
 }

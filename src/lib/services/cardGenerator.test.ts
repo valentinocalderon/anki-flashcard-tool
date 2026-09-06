@@ -91,7 +91,7 @@ test('a noun produces only a basic card and its blanked example in the vocab dec
       back: 'casa (house) (The house is big.)', tags: ['auto-generated'],
     },
   ]);
-  expect(conjugationCards(noun, new Set())).toEqual({ cards: [], claimedKeys: [], claims: [] });
+  expect(conjugationCards(noun, new Set())).toEqual({ cards: [], claims: [] });
 });
 
 test.each([null, 'El hogar es grande.', 'La casita es grande.'])(
@@ -106,11 +106,27 @@ test.each([null, 'El hogar es grande.', 'La casita es grande.'])(
   },
 );
 
-test('blanks the first case-insensitive match and supports an example without a translation', () => {
+test('blanks every case-insensitive match and supports an example without a translation', () => {
   expect(generateCards({ ...noun, example: 'Casa y casa.' })[1]).toEqual({
-    deck: 'Spanish::Vocab', kind: 'example', front: '____ y casa.',
+    deck: 'Spanish::Vocab', kind: 'example', front: '____ y ____.',
     back: 'casa (house)', tags: ['auto-generated'],
   });
+});
+
+test('a verb example blanks the conjugated form supplied as exampleWord', () => {
+  expect(generateCards({
+    ...noun, english: 'to have', spanish: 'tener', gender: null, article: null, type: 'verb',
+    example: 'Tengo un perro. (I have a dog.)', exampleWord: 'Tengo',
+  })[1]).toEqual({
+    deck: 'Spanish::Vocab', kind: 'example', front: '____ un perro.',
+    back: 'tener (to have) (I have a dog.)', tags: ['auto-generated'],
+  });
+});
+
+test('a word present only in the English half yields no example card', () => {
+  expect(generateCards({
+    ...noun, example: 'El hogar es grande. (The casa is big.)',
+  }).map((card) => card.kind)).toEqual(['basic']);
 });
 
 test('an accented noun gets its example card with case-insensitive Unicode matching', () => {
@@ -172,7 +188,6 @@ test('the first regular -ar verb claims one conjugation card per configured tens
         tags: ['auto-generated'],
       },
     ],
-    claimedKeys: ['ar-regular-present', 'ar-regular-preterite'],
     claims: [
       { front: 'Conjugate hablar in present (regular -ar)', key: 'ar-regular-present' },
       { front: 'Conjugate hablar in preterite (regular -ar)', key: 'ar-regular-preterite' },
@@ -191,7 +206,6 @@ test('an e-ie verb claims its stem-changing pattern and skips a tense without fo
         tags: ['auto-generated'],
       },
     ],
-    claimedKeys: ['er-e-ie-present'],
     claims: [{ front: 'Conjugate querer in present (e-ie -er)', key: 'er-e-ie-present' }],
   });
 });
@@ -213,20 +227,18 @@ test('irregular tenses always produce cards without claiming a pattern', () => {
         tags: ['auto-generated'],
       },
     ],
-    claimedKeys: [],
     claims: [],
   });
 });
 
 test('a repeat pattern yields no conjugation cards and leaves the supplied keys untouched', () => {
   const cardedKeys: ReadonlySet<string> = new Set(['ar-regular-present', 'ar-regular-preterite']);
-  expect(conjugationCards(regularVerb, cardedKeys)).toEqual({ cards: [], claimedKeys: [], claims: [] });
+  expect(conjugationCards(regularVerb, cardedKeys)).toEqual({ cards: [], claims: [] });
   expect([...cardedKeys]).toEqual(['ar-regular-present', 'ar-regular-preterite']);
 });
 
 test('deduplicates each tense independently', () => {
   const result = conjugationCards(regularVerb, new Set(['ar-regular-present']));
-  expect(result.claimedKeys).toEqual(['ar-regular-preterite']);
   expect(result.claims).toEqual([
     { front: 'Conjugate hablar in preterite (regular -ar)', key: 'ar-regular-preterite' },
   ]);
@@ -237,7 +249,7 @@ test('deduplicates each tense independently', () => {
 
 test.each([undefined, null])('skips conjugations when classification is %s', (conjugationClass) => {
   expect(conjugationCards({ ...regularVerb, conjugationClass }, new Set())).toEqual({
-    cards: [], claimedKeys: [], claims: [],
+    cards: [], claims: [],
   });
 });
 
@@ -252,7 +264,7 @@ test.each(['Verb', 'verbo', 'noun'])(
 
 test('skips conjugations when classification exists without conjugations', () => {
   expect(conjugationCards({ ...regularVerb, conjugations: null }, new Set())).toEqual({
-    cards: [], claimedKeys: [], claims: [],
+    cards: [], claims: [],
   });
 });
 
@@ -278,6 +290,11 @@ test('the word schema retains valid classification and accepts legacy and non-ve
   const { conjugationClass, ...legacyVerb } = regularVerb;
   expect(conjugationClass).toBeDefined();
   expect(WordInfoSchema.parse(legacyVerb)).toEqual(legacyVerb);
+});
+
+test.each(['Tengo', null])('the word schema retains exampleWord: %j', (exampleWord) => {
+  const word = { ...regularVerb, exampleWord };
+  expect(WordInfoSchema.parse(word)).toEqual(word);
 });
 
 test('the word schema keeps only present and preterite conjugations', () => {
@@ -316,6 +333,9 @@ test('lookup requests six forms for two tenses and classification for verbs or n
   });
   const result = await openaiLookup('hablar');
   const prompt = createCompletion.mock.calls[0]?.[0].messages[0]?.content;
+  expect(prompt).toContain('exampleWord: the exact form of the word as it appears in the Spanish example sentence');
+  expect(prompt).toContain('Tengo when the word is tener');
+  expect(prompt).toContain('null when there is no example');
   expect(prompt).toContain('only present and preterite');
   expect(prompt).not.toMatch(/imperfect|future/);
   for (const pronoun of ['yo', 'tú', 'él/ella', 'nosotros', 'vosotros', 'ellos']) {

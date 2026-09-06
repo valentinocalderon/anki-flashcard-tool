@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import type { WordResult } from '@/lib/services/listGenerationService';
+import { formatResultLine } from '@/lib/resultLine';
+import type { WordResult } from '@/lib/types';
 import { api } from '@/trpc/react';
 
 export default function HomePage() {
@@ -54,14 +55,7 @@ function ResultLine({ result }: { result: WordResult }) {
     <li className="bg-gray-100 p-3 rounded">
       <span aria-hidden="true" className="text-xs mr-2">{mark}</span>
       <strong>{result.word}</strong>:{' '}
-      {result.status === 'added' && (
-        <>
-          {result.vocabCards} vocab cards
-          {result.conjugationCards > 0 && ` plus ${result.conjugationCards} conjugation cards`}
-        </>
-      )}
-      {result.status === 'exists' && 'already stored'}
-      {result.status === 'error' && result.message}
+      {formatResultLine(result)}
     </li>
   );
 }

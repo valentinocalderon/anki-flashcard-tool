@@ -17,6 +17,6 @@ export type AppRouter = typeof appRouter;
  * Create a server-side caller for the tRPC API.
  * @example
  * const trpc = createCaller(createContext);
- * const res = await trpc.anki.getWordInfo({ word: 'casa' });
+ * const res = await trpc.anki.generateFromList({ text: 'casa' });
  */
 export const createCaller = createCallerFactory(appRouter);

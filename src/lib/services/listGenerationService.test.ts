@@ -1,10 +1,10 @@
 import { createClient, type Client } from '@libsql/client';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import type { WordInfo } from '@/lib/types';
+import type { WordInfo, WordResult } from '@/lib/types';
 import { applyMigrations, createDb, type Db } from '@/server/db';
 import { cards, conjugationPatterns, words } from '@/server/db/schema';
 import * as cardGenerator from './cardGenerator';
-import { generateForWords, parseWordList, type WordResult } from './listGenerationService';
+import { generateForWords, parseWordList } from './listGenerationService';
 
 const noun: WordInfo = {
   english: 'house', spanish: 'casa', gender: 'feminine', article: 'la', type: 'noun',
@@ -161,7 +161,7 @@ test('reports an error payload without storing it and continues with the followi
   expect(await db.select().from(cards)).toHaveLength(2);
 });
 
-test('reports a storage error, rolls back the word, and continues with the following word', async () => {
+test('cards and pattern rows are not written when storage fails, and the following word is processed', async () => {
   await client.execute(`
     CREATE TRIGGER reject_preterite_card BEFORE INSERT ON cards
     WHEN NEW.front = 'Conjugate hablar in preterite (regular -ar)'

@@ -23,6 +23,7 @@ export type WordInfo = {
   article: string | null;
   type: string;
   example: string | null;
+  exampleWord?: string | null;
   conjugations: {
     present?: Record<string, string>;
     preterite?: Record<string, string>;
@@ -31,6 +32,15 @@ export type WordInfo = {
   error?: string;
 };
 
+export type WordResult = {
+  word: string;
+  vocabCards: number;
+  conjugationCards: number;
+} & (
+  | { status: 'added' | 'exists'; message?: string }
+  | { status: 'error'; message: string }
+);
+
 export const WordInfoSchema = z.object({
   english: z.string(),
   spanish: z.string(),
@@ -38,6 +48,7 @@ export const WordInfoSchema = z.object({
   article: z.string().nullable(),
   type: z.string(),
   example: z.string().nullable(),
+  exampleWord: z.string().nullable().optional(),
   conjugations: z
     .object({
       present: z.record(z.string()).optional(),
