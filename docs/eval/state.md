@@ -84,7 +84,7 @@ This is a network denial inside the sandbox, not a code defect. src/app/layout.t
 
 ## Paths
 
-No hardcoded absolute paths in any tracked file (grep of every tracked file for /Users/, /home/, ~/ and C:\ returns nothing outside package-lock.json).
+No hardcoded absolute paths in any tracked file (grep of every tracked file for the macOS home prefix, /home/, ~/ and C:\ returns nothing outside package-lock.json).
 
 Path handling in tracked code is process.cwd()-relative: src/lib/config.ts:41 `path.resolve(process.cwd(), "config.json")` — target exists; breaks if cwd is not the repo root.
 
@@ -96,7 +96,7 @@ Paths referenced that no longer exist (confirmed with `test -e`):
 
 README.md has no file or path references. It is the stock create-t3-app README and advertises NextAuth (README.md:12), Prisma (:13) and Drizzle (:14), none of which are in package.json:18-32.
 
-Absolute paths exist only in untracked, git-excluded tooling files: .agent/kit.json:2 (/Users/valentinowork/code/agentkit, exists) and .claude/settings.local.json hook lines (/Library/Frameworks/Python.framework/Versions/3.11/bin/python3 plus agentkit hook scripts; exist).
+Absolute paths exist only in untracked, git-excluded tooling files: .agent/kit.json:2 (the agentkit checkout under the home directory, exists) and .claude/settings.local.json hook lines (/Library/Frameworks/Python.framework/Versions/3.11/bin/python3 plus agentkit hook scripts; exist).
 
 ## Secrets
 
