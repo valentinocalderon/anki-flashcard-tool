@@ -193,7 +193,7 @@ function SendFooter({ report, pendingCount, declinedCount, isPending, onSend, on
 }
 
 function ResultLine({ result }: { result: WordResult }) {
-  const mark = { added: '✓', exists: '–', error: '!' }[result.status];
+  const mark = { added: '✓', exists: '–', skipped: '–', error: '!' }[result.status];
 
   return (
     <li className="bg-gray-100 p-3 rounded">

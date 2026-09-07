@@ -1,8 +1,11 @@
-import { expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { configSchema, loadConfig } from '@/lib/config';
+import * as config from '@/lib/config';
 import { CardSchema, WordInfoSchema, type WordInfo } from '@/lib/types';
 import { openaiLookup } from './aiLookup';
+import { spanishSideItems } from './brainscapeSides';
 import { conjugationCards, generateCards } from './cardGenerator';
+import { dedupeItems } from './listGenerationService';
 
 const { createCompletion } = vi.hoisted(() => ({
   createCompletion: vi.fn<(request: {
@@ -19,6 +22,18 @@ vi.mock('openai', () => ({
   },
 }));
 
+beforeEach(() => {
+  vi.stubGlobal('fetch', vi.fn(() => {
+    throw new Error('Unexpected global fetch; tests must use lookup doubles.');
+  }));
+});
+
+afterEach(() => {
+  expect(fetch).not.toHaveBeenCalled();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
 const noun: WordInfo = {
   english: 'house',
   spanish: 'casa',
@@ -29,6 +44,171 @@ const noun: WordInfo = {
   conjugations: null,
   conjugationClass: null,
 };
+
+const farewell: WordInfo = {
+  ...noun, english: 'goodbye', spanish: 'adiós', gender: null, article: null, type: 'phrase',
+  example: 'Adiós, amigo. (Goodbye, friend.)',
+};
+const farewellInfos: Record<string, WordInfo> = {
+  '¡adiós!': farewell,
+  '¡chao!': { ...farewell, english: 'bye', spanish: 'chao' },
+  'hasta luego': { ...farewell, english: 'see you later', spanish: 'hasta luego' },
+};
+
+function lookedUpItems(sides: string[], infos: Readonly<Record<string, WordInfo>>) {
+  return dedupeItems(sides.flatMap(spanishSideItems)).map((item) => ({
+    forms: item.forms.map((form) => {
+      const info = infos[form.query];
+      if (!info) throw new Error(`Missing lookup fixture for "${form.query}"`);
+      return { ...form, info };
+    }),
+  }));
+}
+
+test.each([
+  {
+    side: 'un muchacho / un chico',
+    english: 'a boy',
+    forms: [
+      { spanish: 'un muchacho', query: 'un muchacho' },
+      { spanish: 'un chico', query: 'un chico' },
+    ],
+  },
+  {
+    side: 'la muchacha / la chica',
+    english: 'the girl',
+    forms: [
+      { spanish: 'la muchacha', query: 'la muchacha' },
+      { spanish: 'la chica', query: 'la chica' },
+    ],
+  },
+  {
+    side: 'los carros / los coches',
+    english: 'the cars',
+    forms: [
+      { spanish: 'los carros', query: 'los carros' },
+      { spanish: 'los coches', query: 'los coches' },
+    ],
+  },
+])('folds identical English once while retaining both Spanish forms: $side', ({ side, english, forms }) => {
+  const item = {
+    forms: forms.map((form) => ({
+      ...form,
+      info: { ...noun, english, spanish: form.spanish, article: null, example: null },
+    })),
+  };
+
+  expect(generateCards(item)).toEqual([{
+    deck: 'Spanish::Vocab', kind: 'basic', front: english,
+    back: side, tags: ['auto-generated'], forms,
+  }]);
+});
+
+test('folds two distinct English meanings in order with individually addressable Spanish forms', () => {
+  const items = lookedUpItems(['¡Adiós! / ¡Chao!'], farewellInfos);
+
+  expect(items.flatMap(generateCards)).toEqual([{
+    deck: 'Spanish::Vocab', kind: 'basic', front: 'goodbye / bye',
+    back: '¡Adiós! / ¡Chao!', tags: ['auto-generated'],
+    forms: [
+      { spanish: '¡Adiós!', query: '¡adiós!' },
+      { spanish: '¡Chao!', query: '¡chao!' },
+    ],
+  }]);
+});
+
+test('folds three forms with a repeated English meaning in first-occurrence order', () => {
+  const items = lookedUpItems(['¡Adiós! / Hasta luego / ¡Chao!'], {
+    ...farewellInfos,
+    '¡chao!': { ...farewell, spanish: 'chao' },
+  });
+
+  expect(items.flatMap(generateCards)).toEqual([{
+    deck: 'Spanish::Vocab', kind: 'basic', front: 'goodbye / see you later',
+    back: '¡Adiós! / Hasta luego / ¡Chao!', tags: ['auto-generated'],
+    forms: [
+      { spanish: '¡Adiós!', query: '¡adiós!' },
+      { spanish: 'Hasta luego', query: 'hasta luego' },
+      { spanish: '¡Chao!', query: '¡chao!' },
+    ],
+  }]);
+});
+
+test('folds three looked-up forms in their original order without per-form example cards', () => {
+  const items = lookedUpItems(['Hasta luego / ¡Adiós! / ¡Chao!'], farewellInfos);
+  const cards = items.flatMap(generateCards);
+
+  expect(cards).toEqual([{
+    deck: 'Spanish::Vocab', kind: 'basic', front: 'see you later / goodbye / bye',
+    back: 'Hasta luego / ¡Adiós! / ¡Chao!', tags: ['auto-generated'],
+    forms: [
+      { spanish: 'Hasta luego', query: 'hasta luego' },
+      { spanish: '¡Adiós!', query: '¡adiós!' },
+      { spanish: '¡Chao!', query: '¡chao!' },
+    ],
+  }]);
+  expect(cards[0]?.forms?.[1]).toEqual({ spanish: '¡Adiós!', query: '¡adiós!' });
+});
+
+test('folds the forms retained by the existing case-insensitive pack dedupe', () => {
+  const items = lookedUpItems(['¡Chao! / ¡Adiós! / ¡CHAO!', '¡ADIÓS!'], farewellInfos);
+
+  expect(items.flatMap(generateCards)).toEqual([{
+    deck: 'Spanish::Vocab', kind: 'basic', front: 'bye / goodbye',
+    back: '¡Chao! / ¡Adiós!', tags: ['auto-generated'],
+    forms: [
+      { spanish: '¡Chao!', query: '¡chao!' },
+      { spanish: '¡Adiós!', query: '¡adiós!' },
+    ],
+  }]);
+});
+
+test.each(['Casa', 'Casa / CASA'])(
+  'a single retained form keeps the exact basic and example card shape: %s',
+  (side) => {
+    const items = lookedUpItems([side], { casa: noun });
+
+    expect(items.flatMap(generateCards)).toEqual([
+      {
+        deck: 'Spanish::Vocab', kind: 'basic', front: 'house', back: 'la casa',
+        tags: ['auto-generated'],
+      },
+      {
+        deck: 'Spanish::Vocab', kind: 'example', front: 'La ____ es grande.',
+        back: 'casa (house) (The house is big.)', tags: ['auto-generated'],
+      },
+    ]);
+  },
+);
+
+test('does not emit a folded basic card when basic cards are disabled', () => {
+  const settings = loadConfig();
+  vi.spyOn(config, 'loadConfig').mockReturnValue({
+    ...settings, cardTypes: { ...settings.cardTypes, basic: false },
+  });
+
+  expect(lookedUpItems(['¡Adiós! / ¡Chao!'], farewellInfos).flatMap(generateCards)).toEqual([]);
+});
+
+test('reports an item with no looked-up forms instead of generating an empty card', () => {
+  expect(() => generateCards({ forms: [] })).toThrow(
+    'Cannot generate cards for an item with 0 forms; supply at least one looked-up form.',
+  );
+});
+
+test.each(['¡Chao!', '¡Chao! / ¡Adiós!', '¡Adiós! / ¡Chao!'])(
+  'reports a form lookup error without generating a partial card: %s',
+  (side) => {
+    const items = lookedUpItems([side], {
+      ...farewellInfos,
+      '¡chao!': { ...farewell, error: 'Lookup timed out after 1000 ms' },
+    });
+
+    expect(() => items.flatMap(generateCards)).toThrow(
+      'Cannot generate cards for "¡Chao!": lookup returned error "Lookup timed out after 1000 ms".',
+    );
+  },
+);
 
 const regularVerb: WordInfo = {
   english: 'to speak',

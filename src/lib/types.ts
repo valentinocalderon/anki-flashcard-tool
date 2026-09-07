@@ -37,7 +37,7 @@ export type WordResult = {
   vocabCards: number;
   conjugationCards: number;
 } & (
-  | { status: 'added' | 'exists'; message?: string }
+  | { status: 'added' | 'exists' | 'skipped'; message?: string }
   | { status: 'error'; message: string }
 );
 

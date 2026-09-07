@@ -19,6 +19,12 @@ test('formats an existing word as already stored', () => {
   })).toBe('already stored');
 });
 
+test('names a skipped word and why it was skipped', () => {
+  expect(formatResultLine({
+    word: 'casa', status: 'skipped', vocabCards: 0, conjugationCards: 0,
+  })).toBe('skipped: already stored');
+});
+
 test('formats an error using its message', () => {
   expect(formatResultLine({
     word: 'casa', status: 'error', vocabCards: 0, conjugationCards: 0,

@@ -1,7 +1,18 @@
 import type { Card, WordInfo } from '@/lib/types';
 import { loadConfig } from '@/lib/config';
+import type { BrainscapeItem } from './brainscapeSides';
 
-export function generateCards(wordInfo: WordInfo): Card[] {
+export type LookedUpItem = {
+  forms: (BrainscapeItem['forms'][number] & { info: WordInfo })[];
+};
+
+export type GeneratedCard = Card & {
+  forms?: BrainscapeItem['forms'];
+};
+
+export function generateCards(wordInfo: WordInfo | LookedUpItem): GeneratedCard[] {
+  if ('forms' in wordInfo) return generateItemCards(wordInfo);
+
   const config = loadConfig();
   const tags = config.addTags;
 
@@ -42,6 +53,33 @@ export function generateCards(wordInfo: WordInfo): Card[] {
   }
 
   return cards;
+}
+
+function generateItemCards(item: LookedUpItem): GeneratedCard[] {
+  const first = item.forms[0];
+  if (!first) {
+    throw new Error('Cannot generate cards for an item with 0 forms; supply at least one looked-up form.');
+  }
+  for (const form of item.forms) {
+    if (form.info.error !== undefined) {
+      throw new Error(`Cannot generate cards for "${form.spanish}": lookup returned error "${form.info.error}".`);
+    }
+  }
+  if (item.forms.length === 1) return generateCards(first.info);
+
+  const config = loadConfig();
+  if (!config.cardTypes.basic) return [];
+
+  // Preserve every Spanish form and its order so each can receive its own Back audio clip.
+  const forms = item.forms.map(({ spanish, query }) => ({ spanish, query }));
+  return [{
+    deck: config.decks.vocab,
+    kind: 'basic',
+    front: [...new Set(item.forms.map(({ info }) => info.english))].join(' / '),
+    back: forms.map((form) => form.spanish).join(' / '),
+    tags: config.addTags,
+    forms,
+  }];
 }
 
 export function conjugationCards(
