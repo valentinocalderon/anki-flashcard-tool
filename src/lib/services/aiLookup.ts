@@ -3,25 +3,51 @@ import { loadConfig } from '@/lib/config';
 import type { WordInfo } from '@/lib/types';
 import { WordInfoSchema } from '@/lib/types';
 import OpenAI from 'openai';
-import { ZodError } from 'zod';
+import { ZodError, type z } from 'zod';
 
-const config = loadConfig();
+export async function askForJson<T>(prompt: string, schema: z.ZodType<T>, client: OpenAI): Promise<T> {
+  const config = loadConfig();
 
-if (!config.aiOptions?.enabled) {
-  throw new Error('❌ AI is disabled in config. Enable it to use OpenAI.');
+  if (!config.aiOptions?.enabled) {
+    throw new Error('❌ AI is disabled in config. Enable it to use OpenAI.');
+  }
+
+  if (!config.aiOptions) {
+    throw new Error('❌ AI options not found in config.');
+  }
+
+  const response = await client.chat.completions.create({
+    model: config.aiOptions.model,
+    temperature: 0.2,
+    response_format: { type: 'json_object' },
+    messages: [{ role: 'user', content: prompt }],
+  });
+  const raw = response.choices[0]?.message.content;
+  if (raw === null || raw === undefined) throw new Error('AI response was not valid JSON');
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    console.error('❌ Failed to parse AI response:', error, raw);
+    throw new Error('AI response was not valid JSON', { cause: error });
+  }
+
+  try {
+    return schema.parse(parsed);
+  } catch (error) {
+    if (!(error instanceof ZodError)) throw error;
+    console.error('❌ AI response did not match the expected shape:', error.issues, raw);
+    throw new Error(`AI response did not match the expected shape: ${JSON.stringify(error.issues)}`, {
+      cause: error,
+    });
+  }
 }
-
-if (!config.aiOptions) {
-  throw new Error('❌ AI options not found in config.');
-}
-
-const aiOptions = config.aiOptions;
-
-const openai = new OpenAI({
-  apiKey: env.OPENAI_API_KEY
-});
 
 export async function openaiLookup(word: string): Promise<WordInfo> {
+  const client = new OpenAI({
+    apiKey: env.OPENAI_API_KEY
+  });
   const prompt = `
 You are a bilingual linguist AI specialized in Spanish and English. Given the word "${word}", return a valid JSON object with the following fields:
 - english: the english version of the input word
@@ -38,32 +64,5 @@ You are a bilingual linguist AI specialized in Spanish and English. Given the wo
 Return ONLY a JSON object with no preamble or explanation.
 `;
 
-  const response = await openai.chat.completions.create({
-    model: aiOptions.model,
-    messages: [{ role: 'user', content: prompt }],
-    temperature: 0.2
-  });
-
-  let parsed: unknown;
-  try {
-    const raw = response.choices[0]?.message?.content;
-    if (raw === null || raw === undefined) throw new Error('AI response content was missing');
-    console.log('🤖 ChatGPT raw response:', raw);
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    console.error('❌ Failed to parse AI response:', error);
-    throw new Error('AI response was not valid JSON', { cause: error });
-  }
-
-  try {
-    const wordInfo = WordInfoSchema.parse(parsed);
-    console.log('🤖 ChatGPT parsed response:', wordInfo);
-    return wordInfo;
-  } catch (error) {
-    if (!(error instanceof ZodError)) throw error;
-    console.error('❌ AI response did not match the expected shape:', error.issues);
-    throw new Error(`AI response did not match the expected shape: ${JSON.stringify(error.issues)}`, {
-      cause: error,
-    });
-  }
+  return askForJson(prompt, WordInfoSchema, client);
 }
