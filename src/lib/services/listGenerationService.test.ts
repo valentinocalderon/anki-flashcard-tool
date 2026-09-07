@@ -3,8 +3,14 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import type { WordInfo, WordResult } from '@/lib/types';
 import { applyMigrations, createDb, type Db } from '@/server/db';
 import { cards, conjugationPatterns, words } from '@/server/db/schema';
+import { askForJson } from './aiLookup';
 import * as cardGenerator from './cardGenerator';
-import { generateForWords, parseWordList } from './listGenerationService';
+import { generateForWords } from './listGenerationService';
+
+vi.mock('@/env', () => ({ env: { OPENAI_API_KEY: 'test-key' } }));
+vi.mock('./aiLookup', () => ({
+  askForJson: vi.fn<typeof askForJson>().mockRejectedValue(new Error('Unexpected extraction request')),
+}));
 
 const noun: WordInfo = {
   english: 'house', spanish: 'casa', gender: 'feminine', article: 'la', type: 'noun',
@@ -65,13 +71,20 @@ beforeEach(async () => {
 afterEach(() => {
   vi.restoreAllMocks();
   client.close();
+  expect(askForJson).not.toHaveBeenCalled();
 });
 
-test('parses lines, trims blanks, and deduplicates case-insensitively keeping first spelling and order', () => {
-  expect(parseWordList('  Casa \r\n\n HABLAR\r casa\nhablar\n árbol \nÁRBOL\npor favor  ')).toEqual([
-    'Casa', 'HABLAR', 'árbol', 'por favor',
-  ]);
-  expect(parseWordList(' \r\n\t\n')).toEqual([]);
+test.each([
+  'Casa, hablar, CASA, por favor',
+  'Casa; hablar; CASA; por favor',
+  ' - Casa, 2) hablar; • CASA\n* por favor',
+])('generates each cleaned delimiter item in order without extraction: %s', async (text) => {
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>().mockResolvedValue(noun);
+
+  const results = await generateForWords(db, text, lookup);
+
+  expect(results.map((result) => result.word)).toEqual(['Casa', 'hablar', 'por favor']);
+  expect(lookup.mock.calls).toEqual([['Casa'], ['hablar'], ['por favor']]);
 });
 
 test('an empty list produces no results or lookups', async () => {

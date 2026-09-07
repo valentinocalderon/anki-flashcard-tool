@@ -1,29 +1,36 @@
-# Create T3 App
+# Spanish to Anki
 
-This is a [T3 Stack](https://create.t3.gg/) project bootstrapped with `create-t3-app`.
+Turn pasted words or text into Spanish vocabulary, example-sentence, and conjugation cards using OpenAI, then send them to Anki in one click. Lookups and cards are saved locally to avoid regenerating existing cards.
 
-## What's next? How do I make an app with this?
+## Setup
 
-We try to keep this project as simple as possible, so you can start with just the scaffolding we set up for you, and add additional things later when they become necessary.
+1. Create a `.env` file in the project root and set `OPENAI_API_KEY` to your OpenAI API key.
+2. In Anki desktop, open **Tools → Add-ons → Get Add-ons**, enter code `2055492159` to install AnkiConnect, and restart Anki. Keep Anki open while sending cards.
+3. Install dependencies and start the app:
 
-If you are not familiar with the different technologies used in this project, please refer to the respective docs. If you still are in the wind, please join our [Discord](https://t3.gg/discord) and ask for help.
+   ```sh
+   npm install
+   npm run dev
+   ```
 
-- [Next.js](https://nextjs.org)
-- [NextAuth.js](https://next-auth.js.org)
-- [Prisma](https://prisma.io)
-- [Drizzle](https://orm.drizzle.team)
-- [Tailwind CSS](https://tailwindcss.com)
-- [tRPC](https://trpc.io)
+4. Open [localhost:3000](http://localhost:3000). To sync cards to your phone, sign in to AnkiWeb in Anki desktop.
 
-## Learn More
+## One-click flow
 
-To learn more about the [T3 Stack](https://create.t3.gg/), take a look at the following resources:
+Pasted text may use lines, commas, semicolons, bullets or numbering, or a plain sentence. Click **Generate and send to Anki**. The app looks up each word, saves new cards, sends pending cards to Anki, and requests an AnkiWeb sync.
 
-- [Documentation](https://create.t3.gg/)
-- [Learn the T3 Stack](https://create.t3.gg/en/faq#what-learning-resources-are-currently-available) — Check out these awesome tutorials
+Each result line shows what was added, already existed, or failed. The send report shows delivery and sync status. After a successful sync, sync Anki on your phone to study the cards.
 
-You can check out the [create-t3-app GitHub repository](https://github.com/t3-oss/create-t3-app) — your feedback and contributions are welcome!
+## Decks and cards
 
-## How do I deploy this?
+- **Spanish::Vocab**: vocabulary cards use **Basic (and reversed card)** for English ↔ Spanish; fill-in-the-blank example cards use **Basic**.
+- **Spanish::Conjugation**: present and preterite conjugation cards use **Basic**. Shared regular and stem-change patterns are added once; irregular forms get their own cards.
 
-Follow our deployment guides for [Vercel](https://create.t3.gg/en/deployment/vercel), [Netlify](https://create.t3.gg/en/deployment/netlify) and [Docker](https://create.t3.gg/en/deployment/docker) for more information.
+The app creates these decks when needed.
+
+## Sending saved cards
+
+- **Send N pending cards** sends saved cards that have not been sent or declined, without running generation again. Use it after reopening Anki or resolving a send failure.
+- **Retry N declined cards** retries cards Anki declined, together with any pending cards. Declined cards stay out of automatic sends; if Anki declines them again, they remain visible for another explicit retry.
+
+Both buttons show the current count and are disabled while generation or sending is in progress.

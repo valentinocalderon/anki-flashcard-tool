@@ -1,4 +1,4 @@
-import { eq, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull } from 'drizzle-orm';
 import { z } from 'zod';
 import { AnkiConnectError, AnkiUnreachableError, type AnkiClient, type AnkiNote } from '@/lib/anki/ankiConnect';
 import { loadConfig } from '@/lib/config';
@@ -15,7 +15,8 @@ export type SendReport = {
 };
 
 export async function sendPending(db: Db, client: AnkiClient): Promise<SendReport> {
-  const pending = await db.select().from(cards).where(isNull(cards.sentAt)).orderBy(cards.id);
+  const pending = await db.select().from(cards)
+    .where(and(isNull(cards.sentAt), isNull(cards.declinedAt))).orderBy(cards.id);
   if (pending.length === 0) {
     return { status: 'nothing', sent: 0, rejected: 0, pending: 0, syncedAt: null, message: null };
   }
@@ -38,7 +39,7 @@ export async function sendPending(db: Db, client: AnkiClient): Promise<SendRepor
   } catch (error) {
     if (error instanceof AnkiUnreachableError) {
       return {
-        status: 'anki_closed', sent: 0, rejected: 0, pending: pending.length, syncedAt: null, message: null,
+        status: 'anki_closed', sent: 0, rejected: 0, pending: pending.length, syncedAt: null, message: error.message,
       };
     }
     if (error instanceof AnkiConnectError) {
@@ -64,7 +65,7 @@ export async function sendPending(db: Db, client: AnkiClient): Promise<SendRepor
         throw new Error(`AnkiConnect returned no result for card ${card.id}; check AnkiConnect and retry.`);
       }
       if (ankiNoteId === null) {
-        await tx.update(cards).set({ sentAt: now }).where(eq(cards.id, card.id));
+        await tx.update(cards).set({ declinedAt: now }).where(eq(cards.id, card.id));
         rejected += 1;
       } else {
         await tx.update(cards).set({ ankiNoteId, sentAt: now }).where(eq(cards.id, card.id));
@@ -81,4 +82,37 @@ export async function sendPending(db: Db, client: AnkiClient): Promise<SendRepor
   }
 
   return { status: 'sent', sent, rejected, pending: 0, syncedAt: now, message: null };
+}
+
+export async function declinedCount(db: Db): Promise<number> {
+  return db.$count(cards, isNotNull(cards.declinedAt));
+}
+
+export async function retryDeclined(db: Db, client: AnkiClient): Promise<SendReport> {
+  const declined = await db.select({ id: cards.id, declinedAt: cards.declinedAt })
+    .from(cards).where(isNotNull(cards.declinedAt));
+  const ids = declined.map((card) => card.id);
+  await db.transaction(async (tx) => {
+    await tx.update(cards).set({ declinedAt: null }).where(inArray(cards.id, ids));
+  });
+  const restoreDeclines = async () => {
+    await db.transaction(async (tx) => {
+      for (const card of declined) {
+        await tx.update(cards).set({ declinedAt: card.declinedAt })
+          .where(and(eq(cards.id, card.id), isNull(cards.sentAt), isNull(cards.declinedAt)));
+      }
+    });
+  };
+
+  let report: SendReport;
+  try {
+    report = await sendPending(db, client);
+  } catch (error) {
+    await restoreDeclines();
+    throw error;
+  }
+  if (report.status === 'anki_closed' || report.status === 'failed') {
+    await restoreDeclines();
+  }
+  return report;
 }

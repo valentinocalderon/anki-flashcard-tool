@@ -26,6 +26,7 @@ export const cards = sqliteTable(
     tags: text("tags").notNull(),
     ankiNoteId: integer("anki_note_id"),
     sentAt: integer("sent_at"),
+    declinedAt: integer("declined_at"),
     createdAt: integer("created_at").notNull(),
   },
   (table) => [

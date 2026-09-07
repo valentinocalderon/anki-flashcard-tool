@@ -1,0 +1,1 @@
+ALTER TABLE `cards` ADD `declined_at` integer;

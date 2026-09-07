@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { createClient, type Client } from "@libsql/client";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import type { WordInfo } from "@/lib/types";
@@ -55,27 +57,49 @@ afterEach(() => {
 test("round-trips JSON text, millisecond timestamps, generated IDs, and nullable send fields", async () => {
   expect(await db.select().from(words)).toEqual([{ id: 1, ...word }]);
   expect(await db.select().from(cards)).toEqual([
-    { id: 1, ...card, ankiNoteId: null, sentAt: null },
+    { id: 1, ...card, ankiNoteId: null, sentAt: null, declinedAt: null },
   ]);
   expect(await db.select().from(conjugationPatterns)).toEqual([
     { id: 1, ...pattern },
   ]);
   await db.update(cards).set({ ankiNoteId: 123_456, sentAt: timestamp + 1 });
   expect(await db.select().from(cards)).toEqual([
-    { id: 1, ...card, ankiNoteId: 123_456, sentAt: timestamp + 1 },
+    { id: 1, ...card, ankiNoteId: 123_456, sentAt: timestamp + 1, declinedAt: null },
   ]);
   const stored = await client.execute("SELECT looked_up_at, info FROM words");
   expect(stored.rows).toEqual([{ looked_up_at: timestamp, info: word.info }]);
 });
 
-test("reapplying migrations preserves stored rows and records the migration once", async () => {
+test("reapplying migrations preserves stored rows and records each migration once", async () => {
   await applyMigrations(db);
   expect(await db.select().from(words)).toEqual([{ id: 1, ...word }]);
   expect(await db.select().from(cards)).toHaveLength(1);
   expect(await db.select().from(conjugationPatterns)).toHaveLength(1);
   expect(
     (await client.execute("SELECT * FROM __drizzle_migrations")).rows,
-  ).toHaveLength(1);
+  ).toHaveLength(3);
+});
+
+test("backfills old-style declines without changing sent or pending cards", async () => {
+  await db.update(cards).set({ sentAt: timestamp + 1 });
+  await db.insert(cards).values([
+    { ...card, front: "sent", ankiNoteId: 123_456, sentAt: timestamp + 2 },
+    { ...card, front: "pending" },
+  ]);
+  const before = await db.select().from(cards).orderBy(cards.id);
+  const backfillHash = createHash("sha256")
+    .update(readFileSync("drizzle/0002_backfill_declined.sql"))
+    .digest("hex");
+  await client.execute({
+    sql: "DELETE FROM __drizzle_migrations WHERE hash = ?",
+    args: [backfillHash],
+  });
+
+  await applyMigrations(db);
+
+  expect(await db.select().from(cards).orderBy(cards.id)).toEqual(before.map((row) => (
+    row.id === 1 ? { ...row, sentAt: null, declinedAt: timestamp + 1 } : row
+  )));
 });
 
 test("rejects a duplicate normalized word query", async () => {

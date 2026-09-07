@@ -1,34 +1,26 @@
 import { eq } from 'drizzle-orm';
+import OpenAI from 'openai';
+import { env } from '@/env';
 import type { WordInfo, WordResult } from '@/lib/types';
 import type { Db } from '@/server/db';
 import { words } from '@/server/db/schema';
+import { askForJson } from './aiLookup';
 import { conjugationCards, generateCards } from './cardGenerator';
 import { cardedPatternKeys, storeCards } from './cardStore';
 import { cachedLookup, normalizeQuery } from './lookupCache';
-
-export function parseWordList(text: string): string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-
-  for (const line of text.split(/\r\n|\n|\r/)) {
-    const word = line.trim();
-    const query = normalizeQuery(word);
-    if (!word || seen.has(query)) continue;
-    seen.add(query);
-    result.push(word);
-  }
-
-  return result;
-}
+import type { AskForJson } from './wordListExtractor';
+import { resolveWordList } from './wordListParser';
 
 export async function generateForWords(
   db: Db,
   text: string,
   lookup: (word: string) => Promise<WordInfo>,
 ): Promise<WordResult[]> {
+  const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+  const ask: AskForJson = (prompt, schema) => askForJson(prompt, schema, client);
   const results: WordResult[] = [];
 
-  for (const word of parseWordList(text)) {
+  for (const word of await resolveWordList(text, ask)) {
     try {
       const info = await cachedLookup(db, word, lookup);
       if (info.error !== undefined) {

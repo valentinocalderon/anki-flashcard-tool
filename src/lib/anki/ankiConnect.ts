@@ -37,6 +37,9 @@ export function createAnkiClient(url: string, fetchImpl: typeof fetch = fetch) {
       });
       responseBody = await response.json();
     } catch (cause) {
+      if (typeof cause === 'object' && cause !== null && 'name' in cause && cause.name === 'TimeoutError') {
+        throw new AnkiUnreachableError('Anki did not answer in time', { cause });
+      }
       throw new AnkiUnreachableError('Anki is not running', { cause });
     }
 

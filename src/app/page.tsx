@@ -6,33 +6,58 @@ import type { SendReport } from '@/lib/services/ankiSender';
 import type { WordResult } from '@/lib/types';
 import { api } from '@/trpc/react';
 
-export default function HomePage() {
-  const [text, setText] = useState('');
+function useAnkiRun() {
   const [sendReport, setSendReport] = useState<SendReport | null>(null);
   const [results, setResults] = useState<WordResult[]>([]);
-  const clearPreviousRun = () => {
-    setSendReport(null);
-    setResults([]);
-  };
   const pendingCount = api.anki.pendingCount.useQuery();
+  const declinedCount = api.anki.declinedCount.useQuery();
+  const refreshCounts = async () => {
+    await Promise.all([pendingCount.refetch(), declinedCount.refetch()]);
+  };
+  const sendOptions = {
+    onSuccess: (send: SendReport) => setSendReport(send),
+    onSettled: refreshCounts,
+  };
+  const sending = api.anki.sendPending.useMutation({
+    ...sendOptions,
+    onMutate: () => {
+      generation.reset();
+      retrying.reset();
+      setSendReport(null);
+    },
+  });
+  const retrying = api.anki.retryDeclined.useMutation({
+    ...sendOptions,
+    onMutate: () => {
+      generation.reset();
+      sending.reset();
+      setSendReport(null);
+    },
+  });
   const generation = api.anki.generateFromList.useMutation({
-    onMutate: clearPreviousRun,
+    onMutate: () => {
+      sending.reset();
+      retrying.reset();
+      setSendReport(null);
+      setResults([]);
+    },
     onSuccess: ({ results, send }) => {
       setResults(results);
       setSendReport(send);
     },
-    onSettled: async () => {
-      await pendingCount.refetch();
-    },
+    onSettled: refreshCounts,
   });
-  const sending = api.anki.sendPending.useMutation({
-    onMutate: () => setSendReport(null),
-    onSuccess: (send) => setSendReport(send),
-    onSettled: async () => {
-      await pendingCount.refetch();
-    },
-  });
-  const isPending = generation.isPending || sending.isPending;
+  return {
+    sendReport, results, pendingCount, declinedCount, generation, sending, retrying,
+    isPending: generation.isPending || sending.isPending || retrying.isPending,
+  };
+}
+
+export default function HomePage() {
+  const [text, setText] = useState('');
+  const {
+    sendReport, results, pendingCount, declinedCount, generation, sending, retrying, isPending,
+  } = useAnkiRun();
 
   return (
     <main className="max-w-2xl mx-auto p-6">
@@ -45,7 +70,7 @@ export default function HomePage() {
         }}
         className="flex flex-col gap-3 mb-6"
       >
-        <label htmlFor="words" className="font-semibold">Words, one per line</label>
+        <label htmlFor="words" className="font-semibold">Words, any way you like: lines, commas or a sentence</label>
         <textarea
           id="words"
           rows={8}
@@ -69,8 +94,17 @@ export default function HomePage() {
       {sending.error && (
         <p role="alert" className="text-red-600">{sending.error.message}</p>
       )}
+      {retrying.error && (
+        <p role="alert" className="text-red-600">{retrying.error.message}</p>
+      )}
       {pendingCount.error && (
         <p role="alert" className="text-red-600">{pendingCount.error.message}</p>
+      )}
+      {declinedCount.error && (
+        <p role="alert" className="text-red-600">{declinedCount.error.message}</p>
+      )}
+      {generation.isSuccess && results.length === 0 && (
+        <p aria-live="polite">No words found in the text.</p>
       )}
       <ul aria-live="polite" className="text-sm space-y-2">
         {results.map((result) => <ResultLine key={result.word} result={result} />)}
@@ -78,8 +112,10 @@ export default function HomePage() {
       <SendFooter
         report={sendReport}
         pendingCount={pendingCount.data}
+        declinedCount={declinedCount.data ?? 0}
         isPending={isPending}
         onSend={() => sending.mutate()}
+        onRetry={() => retrying.mutate()}
       />
     </main>
   );
@@ -89,17 +125,25 @@ function pluralise(count: number, singular: string, plural: string) {
   return count === 1 ? singular : plural;
 }
 
-function SendFooter({ report, pendingCount, isPending, onSend }: {
+function SendFooter({ report, pendingCount, declinedCount, isPending, onSend, onRetry }: {
   report: SendReport | null;
   pendingCount: number | undefined;
+  declinedCount: number;
   isPending: boolean;
   onSend: () => void;
+  onRetry: () => void;
 }) {
-  const hasPending = pendingCount !== undefined && pendingCount > 0;
-  if (report?.status !== 'sent' && report?.status !== 'failed' && !hasPending) return null;
+  const waiting = pendingCount ?? report?.pending ?? 0;
+  const hasReport = report?.status === 'sent' || report?.status === 'failed' || report?.status === 'anki_closed';
+  if (!hasReport && waiting === 0 && declinedCount === 0) {
+    return null;
+  }
 
   return (
     <footer aria-live="polite" className="mt-6 text-sm space-y-3">
+      {report?.status === 'anki_closed' && (
+        <p>{report.message ?? 'Anki is not running.'}</p>
+      )}
       {report?.status === 'failed' && (
         <p role="alert" className="text-red-600">Anki returned an error: {report.message}</p>
       )}
@@ -119,11 +163,10 @@ function SendFooter({ report, pendingCount, isPending, onSend }: {
           )}
         </div>
       )}
-      {hasPending && (
+      {waiting > 0 && (
         <div className="bg-gray-100 p-3 rounded space-y-3">
           <p>
-            {report?.status === 'anki_closed' && 'Anki is not running. '}
-            {pendingCount} {pluralise(pendingCount, 'card is', 'cards are')} waiting to be sent.
+            {waiting} {pluralise(waiting, 'card is', 'cards are')} waiting to be sent.
           </p>
           <button
             type="button"
@@ -131,9 +174,19 @@ function SendFooter({ report, pendingCount, isPending, onSend }: {
             onClick={onSend}
             className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Send {pendingCount} pending {pluralise(pendingCount, 'card', 'cards')}
+            Send {waiting} pending {pluralise(waiting, 'card', 'cards')}
           </button>
         </div>
+      )}
+      {declinedCount > 0 && (
+        <button
+          type="button"
+          disabled={isPending}
+          onClick={onRetry}
+          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Retry {declinedCount} declined {pluralise(declinedCount, 'card', 'cards')}
+        </button>
       )}
     </footer>
   );
