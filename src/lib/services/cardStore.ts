@@ -5,6 +5,7 @@ import type { GeneratedCard } from './cardGenerator';
 import { normalizeQuery } from './lookupCache';
 
 type PatternClaim = Pick<typeof conjugationPatterns.$inferInsert, 'ending' | 'pattern' | 'tense'>;
+type CardToStore = GeneratedCard & Pick<typeof storedCards.$inferInsert, 'audioFile' | 'audioMp3'>;
 
 function parsePatternKey(key: string): PatternClaim {
   const [ending, ...parts] = key.split('-');
@@ -37,7 +38,7 @@ export async function cardedPatternKeys(db: Db): Promise<Set<string>> {
 async function storeCard(
   db: Pick<Db, 'insert' | 'select' | 'update'>,
   wordId: number,
-  { forms, ...card }: GeneratedCard,
+  { forms, ...card }: CardToStore,
   foldedCardId: number | undefined,
 ): Promise<{ inserted: { id: number }[]; updatedCards: number }> {
   if (foldedCardId !== undefined && card.kind === 'basic' && forms && forms.length > 1) {
@@ -56,7 +57,9 @@ async function storeCard(
     if (stored.back === back && JSON.stringify(stored.forms) === JSON.stringify(allForms)) {
       return { inserted: [], updatedCards: 0 };
     }
-    const updated = await db.update(storedCards).set({ back, forms: allForms })
+    const updated = await db.update(storedCards).set({
+      back, forms: allForms, audioFile: card.audioFile, audioMp3: card.audioMp3,
+    })
       .where(eq(storedCards.id, foldedCardId)).returning({ id: storedCards.id });
     if (updated.length === 0) {
       throw new Error(`Card ${foldedCardId} update returned ${updated.length} rows; reload the list and retry.`);
@@ -74,7 +77,7 @@ async function storeCard(
 export async function storeCards(
   db: Db,
   wordId: number,
-  cards: readonly GeneratedCard[],
+  cards: readonly CardToStore[],
   claims: readonly { front: string; key: string }[],
   foldedCardId?: number,
 ): Promise<{ vocabCards: number; conjugationCards: number; updatedCards: number }> {

@@ -33,7 +33,7 @@ const goodbye: WordInfo = {
 };
 const storedGoodbye: typeof cards.$inferSelect = {
   id: 1, wordId: 1, deck: 'Spanish::Vocab', kind: 'basic', front: 'goodbye', back: '¡Adiós!',
-  tags: '["auto-generated"]', forms: null, ankiNoteId: 987654, sentAt: 456, declinedAt: null, createdAt: 123,
+  tags: '["auto-generated"]', forms: null, audioFile: null, audioMp3: null, ankiNoteId: 987654, sentAt: 456, declinedAt: null, createdAt: 123,
 };
 const regularVerb: WordInfo = {
   english: 'to speak', spanish: 'hablar', gender: null, article: null, type: 'verb',
@@ -997,7 +997,7 @@ test('reports exists when a cached word with no cards generates a stored front i
   ];
   const storedCard: typeof cards.$inferSelect = {
     id: 1, wordId: 1, deck: 'Spanish::Vocab', kind: 'basic', front: 'house', back: 'el hogar',
-    tags: '["auto-generated"]', forms: null, ankiNoteId: null, sentAt: null, declinedAt: null, createdAt: 123,
+    tags: '["auto-generated"]', forms: null, audioFile: null, audioMp3: null, ankiNoteId: null, sentAt: null, declinedAt: null, createdAt: 123,
   };
   await db.insert(words).values(storedWords);
   await db.insert(cards).values(storedCard);

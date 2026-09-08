@@ -1,4 +1,5 @@
 import {
+  blob,
   integer,
   sqliteTable,
   text,
@@ -25,6 +26,8 @@ export const cards = sqliteTable(
     back: text("back").notNull(),
     tags: text("tags").notNull(),
     forms: text("forms", { mode: "json" }).$type<{ spanish: string; query: string }[]>(),
+    audioFile: text("audio_file"),
+    audioMp3: blob("audio_mp3", { mode: "buffer" }),
     ankiNoteId: integer("anki_note_id"),
     sentAt: integer("sent_at"),
     declinedAt: integer("declined_at"),

@@ -6,6 +6,10 @@ const cardTypesSchema = z.object({
   conjugation: z.boolean()
 });
 
+const audioSchema = z.object({
+  capCharacters: z.number().int().positive()
+});
+
 const audioOptionsSchema = z.object({
   preferredSource: z.enum(['google']),
   attachToField: z.string(),
@@ -39,6 +43,7 @@ export const configSchema = z.object({
   }),
   addTags: z.array(z.string()),
   autoAddEnabled: z.boolean(),
+  audio: audioSchema,
   audioOptions: audioOptionsSchema,
   aiOptions: aiOptionsSchema.optional(),
 });
@@ -68,6 +73,9 @@ const config: AppConfig = {
   },
   addTags: ['auto-generated'],
   autoAddEnabled: false,
+  audio: {
+    capCharacters: 30000
+  },
   audioOptions: {
     preferredSource: 'google',
     attachToField: 'Front',

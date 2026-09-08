@@ -72,14 +72,14 @@ afterEach(() => {
 test("round-trips JSON text, millisecond timestamps, generated IDs, and nullable send fields", async () => {
   expect(await db.select().from(words)).toEqual([{ id: 1, ...word }]);
   expect(await db.select().from(cards)).toEqual([
-    { id: 1, ...card, forms: null, ankiNoteId: null, sentAt: null, declinedAt: null },
+    { id: 1, ...card, forms: null, audioFile: null, audioMp3: null, ankiNoteId: null, sentAt: null, declinedAt: null },
   ]);
   expect(await db.select().from(conjugationPatterns)).toEqual([
     { id: 1, ...pattern },
   ]);
   await db.update(cards).set({ ankiNoteId: 123_456, sentAt: timestamp + 1 });
   expect(await db.select().from(cards)).toEqual([
-    { id: 1, ...card, forms: null, ankiNoteId: 123_456, sentAt: timestamp + 1, declinedAt: null },
+    { id: 1, ...card, forms: null, audioFile: null, audioMp3: null, ankiNoteId: 123_456, sentAt: timestamp + 1, declinedAt: null },
   ]);
   const stored = await client.execute("SELECT looked_up_at, info FROM words");
   expect(stored.rows).toEqual([{ looked_up_at: timestamp, info: word.info }]);
@@ -89,6 +89,47 @@ test("migrates cards with a nullable JSON text forms column and no default", asy
   expect((await client.execute("PRAGMA table_info(cards)")).rows).toContainEqual(
     expect.objectContaining({ name: "forms", type: "TEXT", notnull: 0, dflt_value: null, pk: 0 }),
   );
+});
+
+test("migrates cards with nullable text audio_file and blob audio_mp3 columns", async () => {
+  expect((await client.execute("PRAGMA table_info(cards)")).rows).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ name: "audio_file", type: "TEXT", notnull: 0, dflt_value: null, pk: 0 }),
+      expect.objectContaining({ name: "audio_mp3", type: "BLOB", notnull: 0, dflt_value: null, pk: 0 }),
+    ]),
+  );
+});
+
+test("accepts omitted and explicit null audio fields for cards without audio", async () => {
+  await db.insert(cards).values({
+    ...card,
+    front: "without audio",
+    audioFile: null,
+    audioMp3: null,
+  });
+
+  expect(await db.select().from(cards).orderBy(cards.id)).toMatchObject([
+    { id: 1, audioFile: null, audioMp3: null },
+    { id: 2, audioFile: null, audioMp3: null },
+  ]);
+});
+
+test("round-trips the Anki media filename and mp3 bytes on their own card row", async () => {
+  await db.insert(cards).values({
+    ...card,
+    front: "with audio",
+    audioFile: "card-2.mp3",
+    audioMp3: Buffer.from([0x49, 0x44, 0x33, 0x00, 0xff, 0xfb, 0x90, 0x64, 0x80, 0x00]),
+  });
+
+  expect(await db.select().from(cards).orderBy(cards.id)).toMatchObject([
+    { id: 1, audioFile: null, audioMp3: null },
+    { id: 2, audioFile: "card-2.mp3", audioMp3: Buffer.from("49443300fffb90648000", "hex") },
+  ]);
+  expect((await client.execute(`SELECT audio_file, typeof(audio_mp3) AS storage_type,
+    hex(audio_mp3) AS bytes FROM cards WHERE id = 2`)).rows).toEqual([
+    { audio_file: "card-2.mp3", storage_type: "blob", bytes: "49443300FFFB90648000" },
+  ]);
 });
 
 test("adds forms to an existing card as null without rewriting its stored fields", async () => {
@@ -107,7 +148,7 @@ test("adds forms to an existing card as null without rewriting its stored fields
   await applyMigrations(db);
 
   expect(await db.select().from(cards)).toEqual([
-    { id: 41, ...card, forms: null, ankiNoteId: 123_456, sentAt: timestamp + 1, declinedAt: null },
+    { id: 41, ...card, forms: null, audioFile: null, audioMp3: null, ankiNoteId: 123_456, sentAt: timestamp + 1, declinedAt: null },
   ]);
   expect((await client.execute("SELECT forms FROM cards")).rows).toEqual([{ forms: null }]);
 });
@@ -119,7 +160,7 @@ test("reapplying migrations preserves stored rows and records each migration onc
   expect(await db.select().from(conjugationPatterns)).toHaveLength(1);
   expect(
     (await client.execute("SELECT * FROM __drizzle_migrations")).rows,
-  ).toHaveLength(4);
+  ).toHaveLength(5);
 });
 
 test("backfills old-style declines without changing sent or pending cards", async () => {
@@ -137,9 +178,9 @@ test("backfills old-style declines without changing sent or pending cards", asyn
   await applyMigrations(db);
 
   expect(await db.select().from(cards).orderBy(cards.id)).toEqual([
-    { id: 1, ...card, forms: null, ankiNoteId: null, sentAt: null, declinedAt: timestamp + 1 },
-    { id: 2, ...card, front: "sent", forms: null, ankiNoteId: 123_456, sentAt: timestamp + 2, declinedAt: null },
-    { id: 3, ...card, front: "pending", forms: null, ankiNoteId: null, sentAt: null, declinedAt: null },
+    { id: 1, ...card, forms: null, audioFile: null, audioMp3: null, ankiNoteId: null, sentAt: null, declinedAt: timestamp + 1 },
+    { id: 2, ...card, front: "sent", forms: null, audioFile: null, audioMp3: null, ankiNoteId: 123_456, sentAt: timestamp + 2, declinedAt: null },
+    { id: 3, ...card, front: "pending", forms: null, audioFile: null, audioMp3: null, ankiNoteId: null, sentAt: null, declinedAt: null },
   ]);
 });
 

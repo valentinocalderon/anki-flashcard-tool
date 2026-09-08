@@ -29,7 +29,7 @@ const folded: GeneratedCard = {
 };
 const storedGoodbye: typeof cards.$inferSelect = {
   id: 41, wordId: 1, deck: 'Spanish::Vocab', kind: 'basic', front: 'goodbye', back: '¡Adiós!',
-  tags: '["original"]', forms: null, ankiNoteId: 987654, sentAt: 456, declinedAt: null, createdAt: 123,
+  tags: '["original"]', forms: null, audioFile: null, audioMp3: null, ankiNoteId: 987654, sentAt: 456, declinedAt: null, createdAt: 123,
 };
 
 let client: Client;
@@ -101,6 +101,134 @@ test('round-trips every folded form on insert', async () => {
   expect((await client.execute('SELECT forms FROM cards')).rows).toEqual([{
     forms: '[{"spanish":"¡Adiós!","query":"¡adiós!"},{"spanish":"¡Chao!","query":"¡chao!"}]',
   }]);
+});
+
+test('persists both audio columns on every inserted card kind with the existing counts', async () => {
+  expect(await storeCards(db, wordId, [
+    { ...basic, audioFile: 'house.mp3', audioMp3: Buffer.from([73, 68, 51, 1]) },
+    { ...example, audioFile: 'example.mp3', audioMp3: Buffer.from([73, 68, 51, 2]) },
+    { ...present, audioFile: 'present.mp3', audioMp3: Buffer.from([73, 68, 51, 3]) },
+  ], [{ front: present.front, key: 'ar-regular-present' }])).toEqual({
+    vocabCards: 2, conjugationCards: 1, updatedCards: 0,
+  });
+  expect(await db.select({ front: cards.front, audioFile: cards.audioFile, audioMp3: cards.audioMp3 })
+    .from(cards).orderBy(cards.id)).toEqual([
+    { front: 'house', audioFile: 'house.mp3', audioMp3: Buffer.from([73, 68, 51, 1]) },
+    { front: 'La ____ es grande.', audioFile: 'example.mp3', audioMp3: Buffer.from([73, 68, 51, 2]) },
+    { front: 'Conjugate hablar in present (regular -ar)', audioFile: 'present.mp3', audioMp3: Buffer.from([73, 68, 51, 3]) },
+  ]);
+  expect(await cardedPatternKeys(db)).toEqual(new Set(['ar-regular-present']));
+
+  expect(await storeCards(db, wordId, [
+    { ...basic, audioFile: 'replacement.mp3', audioMp3: Buffer.from([255]) },
+  ], [])).toEqual({ vocabCards: 0, conjugationCards: 0, updatedCards: 0 });
+  expect((await client.execute('SELECT audio_file, hex(audio_mp3) AS mp3_hex FROM cards ORDER BY id')).rows)
+    .toEqual([
+      { audio_file: 'house.mp3', mp3_hex: '49443301' },
+      { audio_file: 'example.mp3', mp3_hex: '49443302' },
+      { audio_file: 'present.mp3', mp3_hex: '49443303' },
+    ]);
+});
+
+test.each([
+  {
+    name: 'provided', audio: { audioFile: 'goodbye.mp3', audioMp3: Buffer.from([73, 68, 51, 4]) },
+    expected: { audioFile: 'goodbye.mp3', audioMp3: Buffer.from([73, 68, 51, 4]) },
+  },
+  {
+    name: 'omitted', audio: {},
+    expected: { audioFile: 'original.mp3', audioMp3: Buffer.from([73, 68, 51, 0]) },
+  },
+  { name: 'null', audio: { audioFile: null, audioMp3: null }, expected: { audioFile: null, audioMp3: null } },
+])('persists $name audio on a folded update with the existing count and metadata', async ({ audio, expected }) => {
+  await db.insert(cards).values({
+    ...storedGoodbye, audioFile: 'original.mp3', audioMp3: Buffer.from([73, 68, 51, 0]),
+  });
+
+  expect(await storeCards(db, wordId, [{ ...folded, ...audio }], [], 41)).toEqual({
+    vocabCards: 0, conjugationCards: 0, updatedCards: 1,
+  });
+  expect(await db.select().from(cards)).toEqual([{
+    ...storedGoodbye, back: '¡Adiós! / ¡Chao!',
+    forms: [{ spanish: '¡Adiós!', query: '¡adiós!' }, { spanish: '¡Chao!', query: '¡chao!' }],
+    ...expected,
+  }]);
+});
+
+test('keeps an unchanged fold a no-op even when audio is supplied', async () => {
+  const storedFold = {
+    ...storedGoodbye, back: '¡Adiós! / ¡Chao!', audioFile: 'original.mp3', audioMp3: Buffer.from([73, 68, 51]),
+    forms: [{ spanish: '¡Adiós!', query: '¡adiós!' }, { spanish: '¡Chao!', query: '¡chao!' }],
+  };
+  await db.insert(cards).values(storedFold);
+  await client.execute(`
+    CREATE TRIGGER reject_card_update BEFORE UPDATE ON cards
+    BEGIN SELECT RAISE(ABORT, 'unexpected card update'); END
+  `);
+
+  expect(await storeCards(db, wordId, [
+    { ...folded, audioFile: 'replacement.mp3', audioMp3: Buffer.from([255]) },
+  ], [], 41)).toEqual({ vocabCards: 0, conjugationCards: 0, updatedCards: 0 });
+  expect(await db.select().from(cards)).toEqual([storedFold]);
+});
+
+test('propagates an audio insert failure and rolls back the batch while retaining committed audio', async () => {
+  await db.insert(cards).values({
+    ...storedGoodbye, audioFile: 'original.mp3', audioMp3: Buffer.from([73, 68, 51]),
+  });
+  await client.execute(`
+    CREATE TRIGGER reject_audio_insert BEFORE INSERT ON cards
+    WHEN NEW.audio_file = 'present.mp3'
+    BEGIN SELECT RAISE(ABORT, 'audio insert rejected'); END
+  `);
+
+  await expect(storeCards(db, wordId, [
+    { ...basic, audioFile: 'house.mp3', audioMp3: Buffer.from([1]) },
+    { ...present, audioFile: 'present.mp3', audioMp3: Buffer.from([2]) },
+  ], [{ front: present.front, key: 'ar-regular-present' }]))
+    .rejects.toHaveProperty('cause.message', expect.stringContaining('audio insert rejected'));
+  expect(await db.select().from(cards)).toEqual([{
+    ...storedGoodbye, audioFile: 'original.mp3', audioMp3: Buffer.from([73, 68, 51]),
+  }]);
+  expect(await db.select().from(conjugationPatterns)).toEqual([]);
+});
+
+test('propagates an audio update failure and retains the committed row and bytes', async () => {
+  await db.insert(cards).values({
+    ...storedGoodbye, audioFile: 'original.mp3', audioMp3: Buffer.from([73, 68, 51]),
+  });
+  await client.execute(`
+    CREATE TRIGGER reject_audio_update BEFORE UPDATE OF audio_file, audio_mp3 ON cards
+    BEGIN SELECT RAISE(ABORT, 'audio update rejected'); END
+  `);
+
+  await expect(storeCards(db, wordId, [
+    { ...basic, audioFile: 'house.mp3', audioMp3: Buffer.from([1]) },
+    { ...folded, audioFile: 'goodbye.mp3', audioMp3: Buffer.from([2]) },
+  ], [], 41)).rejects.toHaveProperty('cause.message', expect.stringContaining('audio update rejected'));
+  expect(await db.select().from(cards)).toEqual([{
+    ...storedGoodbye, audioFile: 'original.mp3', audioMp3: Buffer.from([73, 68, 51]),
+  }]);
+});
+
+test('rolls back audio written by an enrichment when a later pattern claim fails', async () => {
+  await db.insert(cards).values({
+    ...storedGoodbye, audioFile: 'original.mp3', audioMp3: Buffer.from([73, 68, 51]),
+  });
+  await client.execute(`
+    CREATE TRIGGER reject_pattern BEFORE INSERT ON conjugation_patterns
+    BEGIN SELECT RAISE(ABORT, 'pattern insert rejected'); END
+  `);
+
+  await expect(storeCards(db, wordId, [
+    { ...folded, audioFile: 'goodbye.mp3', audioMp3: Buffer.from([1]) },
+    { ...present, audioFile: 'present.mp3', audioMp3: Buffer.from([2]) },
+  ], [{ front: present.front, key: 'ar-regular-present' }], 41))
+    .rejects.toHaveProperty('cause.message', expect.stringContaining('pattern insert rejected'));
+  expect(await db.select().from(cards)).toEqual([{
+    ...storedGoodbye, audioFile: 'original.mp3', audioMp3: Buffer.from([73, 68, 51]),
+  }]);
+  expect(await db.select().from(conjugationPatterns)).toEqual([]);
 });
 
 test('propagates a folded insert failure, rolls back its batch, and retains previously committed cards', async () => {
