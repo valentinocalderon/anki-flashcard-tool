@@ -9,13 +9,17 @@ import { api } from '@/trpc/react';
 function useAnkiRun() {
   const [sendReport, setSendReport] = useState<SendReport | null>(null);
   const [results, setResults] = useState<WordResult[]>([]);
+  const [backfillReport, setBackfillReport] = useState<SendReport | null>(null);
   const pendingCount = api.anki.pendingCount.useQuery();
   const declinedCount = api.anki.declinedCount.useQuery();
   const refreshCounts = async () => {
     await Promise.all([pendingCount.refetch(), declinedCount.refetch()]);
   };
   const sendOptions = {
-    onSuccess: (send: SendReport) => setSendReport(send),
+    onSuccess: ({ send, backfill }: { send: SendReport; backfill: SendReport }) => {
+      setSendReport(send);
+      setBackfillReport(backfill);
+    },
     onSettled: refreshCounts,
   };
   const sending = api.anki.sendPending.useMutation({
@@ -24,6 +28,7 @@ function useAnkiRun() {
       generation.reset();
       retrying.reset();
       setSendReport(null);
+      setBackfillReport(null);
     },
   });
   const retrying = api.anki.retryDeclined.useMutation({
@@ -32,6 +37,7 @@ function useAnkiRun() {
       generation.reset();
       sending.reset();
       setSendReport(null);
+      setBackfillReport(null);
     },
   });
   const generation = api.anki.generateFromList.useMutation({
@@ -39,16 +45,18 @@ function useAnkiRun() {
       sending.reset();
       retrying.reset();
       setSendReport(null);
+      setBackfillReport(null);
       setResults([]);
     },
-    onSuccess: ({ results, send }) => {
+    onSuccess: ({ results, send, backfill }) => {
       setResults(results);
       setSendReport(send);
+      setBackfillReport(backfill);
     },
     onSettled: refreshCounts,
   });
   return {
-    sendReport, results, pendingCount, declinedCount, generation, sending, retrying,
+    sendReport, backfillReport, results, pendingCount, declinedCount, generation, sending, retrying,
     isPending: generation.isPending || sending.isPending || retrying.isPending,
   };
 }
@@ -56,7 +64,7 @@ function useAnkiRun() {
 export default function HomePage() {
   const [text, setText] = useState('');
   const {
-    sendReport, results, pendingCount, declinedCount, generation, sending, retrying, isPending,
+    sendReport, backfillReport, results, pendingCount, declinedCount, generation, sending, retrying, isPending,
   } = useAnkiRun();
 
   return (
@@ -114,6 +122,7 @@ export default function HomePage() {
       </ul>
       <SendFooter
         report={sendReport}
+        backfill={backfillReport}
         pendingCount={pendingCount.data}
         declinedCount={declinedCount.data ?? 0}
         isPending={isPending}
@@ -128,8 +137,9 @@ function pluralise(count: number, singular: string, plural: string) {
   return count === 1 ? singular : plural;
 }
 
-function SendFooter({ report, pendingCount, declinedCount, isPending, onSend, onRetry }: {
+function SendFooter({ report, backfill, pendingCount, declinedCount, isPending, onSend, onRetry }: {
   report: SendReport | null;
+  backfill: SendReport | null;
   pendingCount: number | undefined;
   declinedCount: number;
   isPending: boolean;
@@ -138,7 +148,9 @@ function SendFooter({ report, pendingCount, declinedCount, isPending, onSend, on
 }) {
   const waiting = pendingCount ?? report?.pending ?? 0;
   const hasReport = report?.status === 'sent' || report?.status === 'failed' || report?.status === 'anki_closed';
-  if (!hasReport && waiting === 0 && declinedCount === 0) {
+  const backfillFailed = backfill?.status === 'failed' || backfill?.status === 'anki_closed';
+  const backfilled = backfill?.sent ?? 0;
+  if (!hasReport && !backfillFailed && backfilled === 0 && waiting === 0 && declinedCount === 0) {
     return null;
   }
 
@@ -154,6 +166,8 @@ function SendFooter({ report, pendingCount, declinedCount, isPending, onSend, on
         <div className="space-y-2">
           {report.syncedAt === null ? (
             <p>Sent to Anki. AnkiWeb sync failed: {report.message}</p>
+          ) : backfilled > 0 ? (
+            <p>Sent to Anki.</p>
           ) : (
             <p>
               Synced to AnkiWeb at {new Date(report.syncedAt).toLocaleTimeString('en-GB', {
@@ -165,6 +179,15 @@ function SendFooter({ report, pendingCount, declinedCount, isPending, onSend, on
             <p>Anki declined {report.rejected} {pluralise(report.rejected, 'card', 'cards')}.</p>
           )}
         </div>
+      )}
+      {backfilled > 0 && (
+        <>
+          <p>{backfilled} {pluralise(backfilled, 'card', 'cards')} already in Anki gained audio.</p>
+          <p>Sync Anki desktop with AnkiWeb, then sync Anki on your phone to get this audio.</p>
+        </>
+      )}
+      {backfillFailed && (
+        <p role="alert" className="text-red-600">Audio backfill failed: {backfill.message}</p>
       )}
       {waiting > 0 && (
         <div className="bg-gray-100 p-3 rounded space-y-3">

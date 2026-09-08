@@ -37,6 +37,7 @@ function fakeClient(results: (number | null)[]) {
       calls.push('addNotes');
       return results;
     }),
+    updateNoteFields: vi.fn<AnkiClient['updateNoteFields']>(),
     sync: vi.fn<AnkiClient['sync']>(async () => {
       calls.push('sync');
     }),
@@ -125,6 +126,12 @@ test.each([
   ]);
   expect(await db.select({ back: cards.back }).from(cards).where(eq(cards.id, 10)).get())
     .toEqual({ back: 'la casa' });
+  expect(await db.select({ audioSentAt: cards.audioSentAt }).from(cards).where(eq(cards.id, id)).get())
+    .toEqual({ audioSentAt: 1800000000000 });
+  expect(await db.select({ audioSentAt: cards.audioSentAt }).from(cards)
+    .where(inArray(cards.id, [15, 25])).orderBy(cards.id)).toEqual([
+    { audioSentAt: null }, { audioSentAt: null },
+  ]);
   expect(await sendPending(db, client)).toEqual({
     status: 'nothing', sent: 0, rejected: 0, pending: 0, syncedAt: null, message: null,
   });
@@ -142,6 +149,10 @@ test('sends cards without cached audio unchanged through the injected fetch', as
     status: 'sent', sent: 3, rejected: 0, pending: 0, syncedAt: 1800000000000, message: null,
   });
   expect(fetchImpl).toHaveBeenCalledTimes(4);
+  expect(await db.select({ audioSentAt: cards.audioSentAt }).from(cards)
+    .where(inArray(cards.id, [10, 20, 30])).orderBy(cards.id)).toEqual([
+    { audioSentAt: null }, { audioSentAt: null }, { audioSentAt: null },
+  ]);
   expect(requestBody(fetchImpl.mock.calls[2]?.[1])).toEqual({
     action: 'addNotes', version: 6, params: { notes: [
       {
@@ -263,13 +274,62 @@ test.each([
   });
   expect(await db.select({
     id: cards.id, ankiNoteId: cards.ankiNoteId, sentAt: cards.sentAt, declinedAt: cards.declinedAt,
+    audioSentAt: cards.audioSentAt,
   }).from(cards).where(inArray(cards.id, [10, 20, 30, 40])).orderBy(cards.id)).toEqual([
-    { id: 10, ankiNoteId: 101, sentAt: 1800000000000, declinedAt: null },
-    { id: 20, ankiNoteId: null, sentAt: null, declinedAt: 1800000000000 },
-    { id: 30, ankiNoteId: 103, sentAt: 1800000000000, declinedAt: null },
-    { id: 40, ankiNoteId: null, sentAt: null, declinedAt: null },
+    { id: 10, ankiNoteId: 101, sentAt: 1800000000000, declinedAt: null, audioSentAt: 1800000000000 },
+    { id: 20, ankiNoteId: null, sentAt: null, declinedAt: 1800000000000, audioSentAt: null },
+    { id: 30, ankiNoteId: 103, sentAt: 1800000000000, declinedAt: null, audioSentAt: null },
+    { id: 40, ankiNoteId: null, sentAt: null, declinedAt: null, audioSentAt: null },
   ]);
   expect(fetchImpl).toHaveBeenCalledTimes(5);
+});
+
+test('marks audio only for accepted notes when uploaded audio accompanies a declined note', async () => {
+  await db.update(cards).set({ audioFile: 'cached.mp3', audioMp3: Buffer.from([73, 68, 51]) })
+    .where(inArray(cards.id, [10, 20]));
+  const fetchImpl = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(Response.json({ result: 1, error: null }))
+    .mockResolvedValueOnce(Response.json({ result: 2, error: null }))
+    .mockResolvedValueOnce(Response.json({ result: 'cached.mp3', error: null }))
+    .mockResolvedValueOnce(Response.json({ result: 'cached.mp3', error: null }))
+    .mockResolvedValueOnce(Response.json({ result: [101, null, 103], error: null }))
+    .mockResolvedValueOnce(Response.json({ result: null, error: null }));
+
+  expect(await sendPending(db, createAnkiClient('http://127.0.0.1:9876', fetchImpl))).toEqual({
+    status: 'sent', sent: 2, rejected: 1, pending: 0, syncedAt: 1800000000000, message: null,
+  });
+  expect(await db.select({ id: cards.id, audioSentAt: cards.audioSentAt }).from(cards)
+    .where(inArray(cards.id, [10, 20, 30])).orderBy(cards.id)).toEqual([
+    { id: 10, audioSentAt: 1800000000000 }, { id: 20, audioSentAt: null }, { id: 30, audioSentAt: null },
+  ]);
+  expect(fetchImpl).toHaveBeenCalledTimes(6);
+});
+
+test.each([
+  {
+    status: 'failed', message: 'addNotes failed',
+    response: () => Promise.resolve(Response.json({ result: null, error: 'addNotes failed' })),
+  },
+  {
+    status: 'anki_closed',
+    message: 'Anki is not running or cannot be reached. Open Anki and try again. AnkiConnect request failed: connection reset',
+    response: () => Promise.reject(new TypeError('connection reset')),
+  },
+])('does not mark uploaded audio when addNotes reports $status', async ({ status, message, response }) => {
+  await db.update(cards).set({ audioFile: 'cached.mp3', audioMp3: Buffer.from([73, 68, 51]) })
+    .where(eq(cards.id, 10));
+  const before = await db.select().from(cards).orderBy(cards.id);
+  const fetchImpl = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(Response.json({ result: 1, error: null }))
+    .mockResolvedValueOnce(Response.json({ result: 2, error: null }))
+    .mockResolvedValueOnce(Response.json({ result: 'cached.mp3', error: null }))
+    .mockImplementationOnce(response);
+
+  expect(await sendPending(db, createAnkiClient('http://127.0.0.1:9876', fetchImpl))).toEqual({
+    status, sent: 0, rejected: 0, pending: 3, syncedAt: null, message,
+  });
+  expect(await db.select().from(cards).orderBy(cards.id)).toEqual(before);
+  expect(fetchImpl).toHaveBeenCalledTimes(4);
 });
 
 test('sends pending cards in id order with configured note types, creates each deck once, and syncs', async () => {
@@ -400,7 +460,7 @@ test('retryDeclined resends declined cards and a second null records a new decli
 test.each([
   { status: 'anki_closed', error: new AnkiUnreachableError('Anki is not running'), action: 'createDeck' },
   { status: 'anki_closed', error: new AnkiUnreachableError('Anki is not running'), action: 'addNotes' },
-  { status: 'anki_closed', error: new AnkiUnreachableError('AnkiConnect request failed: fetch failed'), action: 'storeMediaFile' },
+  { status: 'anki_closed', error: new AnkiUnreachableError('Anki is not running or cannot be reached. Open Anki and try again. AnkiConnect request failed: fetch failed'), action: 'storeMediaFile' },
   { status: 'failed', error: new AnkiConnectError('Anki refused the request; check Anki settings.'), action: 'createDeck' },
   { status: 'failed', error: new AnkiConnectError('Anki refused the request; check Anki settings.'), action: 'addNotes' },
   { status: 'failed', error: new AnkiConnectError('Media write failed: disk full'), action: 'storeMediaFile' },

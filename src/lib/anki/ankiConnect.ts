@@ -23,7 +23,7 @@ const responseSchema = z.object({
 
 export function createAnkiClient(url: string, fetchImpl: typeof fetch = fetch) {
   async function invoke<T>(
-    action: 'createDeck' | 'storeMediaFile' | 'addNotes' | 'sync',
+    action: 'createDeck' | 'storeMediaFile' | 'addNotes' | 'updateNoteFields' | 'sync',
     params: Record<string, unknown>,
     resultSchema: z.ZodType<T>
   ): Promise<T> {
@@ -71,6 +71,9 @@ export function createAnkiClient(url: string, fetchImpl: typeof fetch = fetch) {
     },
     addNotes(notes: AnkiNote[]): Promise<(number | null)[]> {
       return invoke('addNotes', { notes }, z.array(z.number().nullable()));
+    },
+    async updateNoteFields(id: number, fields: Record<string, string>): Promise<void> {
+      await invoke('updateNoteFields', { note: { id, fields } }, z.null());
     },
     async sync(): Promise<void> {
       await invoke('sync', {}, z.null());

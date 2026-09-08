@@ -59,8 +59,8 @@ async function storeCard(
       return { inserted: [], updatedCards: 0 };
     }
     const audio = card.audioMp3 != null
-      ? { audioFile: card.audioFile, audioMp3: card.audioMp3 }
-      : stored.back !== back ? { audioFile: null, audioMp3: null } : {};
+      ? { audioFile: card.audioFile, audioMp3: card.audioMp3, audioSentAt: null }
+      : stored.back !== back ? { audioFile: null, audioMp3: null, audioSentAt: null } : {};
     const updated = await db.update(storedCards).set({
       ...(unchanged ? {} : { back, forms: allForms }), ...audio,
     })
@@ -80,7 +80,9 @@ async function storeCard(
       eq(storedCards.deck, card.deck), eq(storedCards.front, card.front), isNull(storedCards.audioMp3),
     )).get();
     if (stored) {
-      const updated = await db.update(storedCards).set({ audioFile: card.audioFile, audioMp3: card.audioMp3 })
+      const updated = await db.update(storedCards).set({
+        audioFile: card.audioFile, audioMp3: card.audioMp3, audioSentAt: null,
+      })
         .where(eq(storedCards.id, stored.id)).returning({ id: storedCards.id });
       if (updated.length === 0) {
         throw new Error(`Card ${stored.id} update returned ${updated.length} rows; reload the list and retry.`);

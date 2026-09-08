@@ -72,14 +72,14 @@ afterEach(() => {
 test("round-trips JSON text, millisecond timestamps, generated IDs, and nullable send fields", async () => {
   expect(await db.select().from(words)).toEqual([{ id: 1, ...word }]);
   expect(await db.select().from(cards)).toEqual([
-    { id: 1, ...card, forms: null, audioFile: null, audioMp3: null, ankiNoteId: null, sentAt: null, declinedAt: null },
+    { id: 1, ...card, forms: null, audioFile: null, audioMp3: null, audioSentAt: null, ankiNoteId: null, sentAt: null, declinedAt: null },
   ]);
   expect(await db.select().from(conjugationPatterns)).toEqual([
     { id: 1, ...pattern },
   ]);
   await db.update(cards).set({ ankiNoteId: 123_456, sentAt: timestamp + 1 });
   expect(await db.select().from(cards)).toEqual([
-    { id: 1, ...card, forms: null, audioFile: null, audioMp3: null, ankiNoteId: 123_456, sentAt: timestamp + 1, declinedAt: null },
+    { id: 1, ...card, forms: null, audioFile: null, audioMp3: null, audioSentAt: null, ankiNoteId: 123_456, sentAt: timestamp + 1, declinedAt: null },
   ]);
   const stored = await client.execute("SELECT looked_up_at, info FROM words");
   expect(stored.rows).toEqual([{ looked_up_at: timestamp, info: word.info }]);
@@ -98,6 +98,20 @@ test("migrates cards with nullable text audio_file and blob audio_mp3 columns", 
       expect.objectContaining({ name: "audio_mp3", type: "BLOB", notnull: 0, dflt_value: null, pk: 0 }),
     ]),
   );
+});
+
+test("migrates cards with a nullable integer audio_sent_at column and no default", async () => {
+  const columns = (await client.execute("PRAGMA table_info(cards)")).rows;
+  expect(columns.find((column) => column.name === "audio_sent_at")).toMatchObject({
+    name: "audio_sent_at", type: "INTEGER", notnull: 0, dflt_value: null, pk: 0,
+  });
+  expect(await db.select().from(cards)).toMatchObject([{ audioSentAt: null }]);
+
+  await client.execute("UPDATE cards SET audio_sent_at = 1788696000124");
+  expect(await db.select().from(cards)).toMatchObject([{ audioSentAt: 1_788_696_000_124 }]);
+
+  await client.execute("UPDATE cards SET audio_sent_at = NULL");
+  expect(await db.select().from(cards)).toMatchObject([{ audioSentAt: null }]);
 });
 
 test("accepts omitted and explicit null audio fields for cards without audio", async () => {
@@ -148,7 +162,7 @@ test("adds forms to an existing card as null without rewriting its stored fields
   await applyMigrations(db);
 
   expect(await db.select().from(cards)).toEqual([
-    { id: 41, ...card, forms: null, audioFile: null, audioMp3: null, ankiNoteId: 123_456, sentAt: timestamp + 1, declinedAt: null },
+    { id: 41, ...card, forms: null, audioFile: null, audioMp3: null, audioSentAt: null, ankiNoteId: 123_456, sentAt: timestamp + 1, declinedAt: null },
   ]);
   expect((await client.execute("SELECT forms FROM cards")).rows).toEqual([{ forms: null }]);
 });
@@ -160,7 +174,7 @@ test("reapplying migrations preserves stored rows and records each migration onc
   expect(await db.select().from(conjugationPatterns)).toHaveLength(1);
   expect(
     (await client.execute("SELECT * FROM __drizzle_migrations")).rows,
-  ).toHaveLength(5);
+  ).toHaveLength(6);
 });
 
 test("backfills old-style declines without changing sent or pending cards", async () => {
@@ -178,9 +192,9 @@ test("backfills old-style declines without changing sent or pending cards", asyn
   await applyMigrations(db);
 
   expect(await db.select().from(cards).orderBy(cards.id)).toEqual([
-    { id: 1, ...card, forms: null, audioFile: null, audioMp3: null, ankiNoteId: null, sentAt: null, declinedAt: timestamp + 1 },
-    { id: 2, ...card, front: "sent", forms: null, audioFile: null, audioMp3: null, ankiNoteId: 123_456, sentAt: timestamp + 2, declinedAt: null },
-    { id: 3, ...card, front: "pending", forms: null, audioFile: null, audioMp3: null, ankiNoteId: null, sentAt: null, declinedAt: null },
+    { id: 1, ...card, forms: null, audioFile: null, audioMp3: null, audioSentAt: null, ankiNoteId: null, sentAt: null, declinedAt: timestamp + 1 },
+    { id: 2, ...card, front: "sent", forms: null, audioFile: null, audioMp3: null, audioSentAt: null, ankiNoteId: 123_456, sentAt: timestamp + 2, declinedAt: null },
+    { id: 3, ...card, front: "pending", forms: null, audioFile: null, audioMp3: null, audioSentAt: null, ankiNoteId: null, sentAt: null, declinedAt: null },
   ]);
 });
 

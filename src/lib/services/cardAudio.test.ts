@@ -7,7 +7,7 @@ import { conjugationCards, generateCards } from './cardGenerator';
 const basic: typeof cards.$inferSelect = {
   id: 41, wordId: 1, deck: 'Spanish::Vocab', kind: 'basic', front: 'house',
   back: '  la <b>casa</b> &amp; el hogar\n', tags: '["vocab"]', forms: null,
-  audioFile: null, audioMp3: null, ankiNoteId: null, sentAt: null, declinedAt: null, createdAt: 123,
+  audioFile: null, audioMp3: null, audioSentAt: null, ankiNoteId: null, sentAt: null, declinedAt: null, createdAt: 123,
 };
 const example: typeof cards.$inferSelect = {
   ...basic, id: 42, kind: 'example', front: 'La ____ es grande.',

@@ -1,7 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import OpenAI from 'openai';
 import { env } from '@/env';
-import { loadConfig } from '@/lib/config';
 import type { WordInfo, WordResult } from '@/lib/types';
 import type { Db } from '@/server/db';
 import { cards, words } from '@/server/db/schema';
@@ -12,7 +11,7 @@ import { cardAudio } from './cardAudio';
 import { conjugationCards, generateCards, type GeneratedCard, type LookedUpItem } from './cardGenerator';
 import { cardedPatternKeys, storeCards } from './cardStore';
 import { cachedLookup, normalizeQuery } from './lookupCache';
-import { createSpanishVoice } from './spanishVoice';
+import type { createSpanishVoice } from './spanishVoice';
 import type { AskForJson } from './wordListExtractor';
 import { resolveWordList } from './wordListParser';
 
@@ -162,8 +161,8 @@ export async function generateForWords(
   text: string,
   lookup: (word: string) => Promise<WordInfo>,
   fetchImpl: typeof fetch,
+  voice: ReturnType<typeof createSpanishVoice>,
 ): Promise<{ results: WordResult[]; capReached: boolean }> {
-  const voice = createSpanishVoice(loadConfig().audio, fetchImpl);
   const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
   const ask: AskForJson = (prompt, schema) => askForJson(prompt, schema, client);
   const results: WordResult[] = [];

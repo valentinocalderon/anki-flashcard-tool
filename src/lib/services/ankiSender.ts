@@ -80,7 +80,10 @@ export async function sendPending(db: Db, client: AnkiClient): Promise<SendRepor
         await tx.update(cards).set({ declinedAt: now }).where(eq(cards.id, card.id));
         rejected += 1;
       } else {
-        await tx.update(cards).set({ ankiNoteId, sentAt: now }).where(eq(cards.id, card.id));
+        await tx.update(cards).set({
+          ankiNoteId, sentAt: now,
+          ...(card.audioFile && card.audioMp3 ? { audioSentAt: now } : {}),
+        }).where(eq(cards.id, card.id));
         sent += 1;
       }
     }

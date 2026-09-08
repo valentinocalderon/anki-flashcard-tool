@@ -1,6 +1,7 @@
 import { createClient } from '@libsql/client';
 import { expect, test, vi } from 'vitest';
 import type * as AnkiSender from '@/lib/services/ankiSender';
+import type { generateForWords } from '@/lib/services/listGenerationService';
 import type { WordResult } from '@/lib/types';
 import { applyMigrations, createDb } from '@/server/db';
 import { cards, words } from '@/server/db/schema';
@@ -40,6 +41,11 @@ const actions: {
     action: 'storeMediaFile', params: { filename: 'casa.mp3', data: 'SUQzAP8=' },
     result: 'casa.mp3', expected: 'casa.mp3',
     invoke: (client) => client.storeMediaFile('casa.mp3', Buffer.from([73, 68, 51, 0, 255])),
+  },
+  {
+    action: 'updateNoteFields', params: { note: { id: 456, fields: { Back: 'la casa [sound:casa.mp3]' } } },
+    result: null, expected: undefined,
+    invoke: (client) => client.updateNoteFields(456, { Back: 'la casa [sound:casa.mp3]' }),
   },
   {
     action: 'sync', params: {}, result: null, expected: undefined,
@@ -94,7 +100,7 @@ test('an empty error string still throws AnkiConnectError', async () => {
   await expect(result).rejects.toHaveProperty('message', '');
 });
 
-test.each(actions)('$action tells the user to open Anki after a rejected fetch and preserves its cause', async (action) => {
+test.each(actions)('$action reports a rejected fetch and preserves its cause', async (action) => {
   const cause = new TypeError('fetch failed');
   const fetchImpl = vi.fn<typeof fetch>().mockRejectedValueOnce(cause);
   const result = action.invoke(createAnkiClient(url, fetchImpl));
@@ -103,6 +109,13 @@ test.each(actions)('$action tells the user to open Anki after a rejected fetch a
   await expect(result).rejects.toHaveProperty('message',
     'Anki is not running or cannot be reached. Open Anki and try again. AnkiConnect request failed: fetch failed');
   await expect(result).rejects.toHaveProperty('cause', cause);
+});
+
+test.each([0, '', {}, []].map((result) => ({ result })))('updateNoteFields rejects a non-null result: $result', async ({ result }) => {
+  const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(Response.json({ result, error: null }));
+
+  await expect(createAnkiClient(url, fetchImpl).updateNoteFields(456, { Back: 'la casa' }))
+    .rejects.toHaveProperty('name', 'ZodError');
 });
 
 test.each(actions)('$action reports a timed out fetch with its cause', async (action) => {
@@ -157,10 +170,17 @@ test('an unexpected send failure preserves word results and counts only pending 
       ...card, wordId: word.id, deck: 'Spanish::Vocab', kind: 'basic' as const,
       back: 'la casa', tags: '[]', createdAt: 1,
     })));
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockRejectedValue(new Error('Unexpected network request')));
+    vi.doMock('@/env', () => ({ env: {
+      OPENAI_API_KEY: 'test-key', ELEVENLABS_API_KEY: 'test-api-key', ELEVENLABS_VOICE_ID: 'test-voice-id',
+    } }));
     vi.doMock('@/server/db', () => ({ getDb: () => Promise.resolve(db) }));
     vi.doMock('@/lib/services/aiLookup', () => ({ openaiLookup: vi.fn() }));
     vi.doMock('@/lib/services/listGenerationService', () => ({
-      generateForWords: vi.fn().mockResolvedValue({ results, capReached: true }),
+      generateForWords: vi.fn<typeof generateForWords>().mockImplementation(async (...args) => {
+        await args[4].synthesize('a'.repeat(30001));
+        return { results, capReached: true };
+      }),
     }));
     vi.doMock('@/lib/services/ankiSender', async (importOriginal) => ({
       ...await importOriginal<typeof AnkiSender>(),
@@ -175,10 +195,14 @@ test('an unexpected send failure preserves word results and counts only pending 
       capReached: true,
       send: {
         status: 'failed', sent: 0, rejected: 0, pending: 1,
-        syncedAt: null, message: error.message,
+        syncedAt: null, message: 'Unexpected send failure',
       },
+      backfill: { status: 'nothing', sent: 0, rejected: 0, pending: 0, syncedAt: null, message: null },
     });
+    expect(fetch).not.toHaveBeenCalled();
   } finally {
+    vi.unstubAllGlobals();
+    vi.doUnmock('@/env');
     vi.doUnmock('@/server/db');
     vi.doUnmock('@/lib/services/aiLookup');
     vi.doUnmock('@/lib/services/listGenerationService');

@@ -29,7 +29,7 @@ const folded: GeneratedCard = {
 };
 const storedGoodbye: typeof cards.$inferSelect = {
   id: 41, wordId: 1, deck: 'Spanish::Vocab', kind: 'basic', front: 'goodbye', back: '¡Adiós!',
-  tags: '["original"]', forms: null, audioFile: null, audioMp3: null, ankiNoteId: 987654, sentAt: 456, declinedAt: null, createdAt: 123,
+  tags: '["original"]', forms: null, audioFile: null, audioMp3: null, audioSentAt: null, ankiNoteId: 987654, sentAt: 456, declinedAt: null, createdAt: 123,
 };
 
 let client: Client;
@@ -119,6 +119,7 @@ test('persists inserted audio on every card kind and preserves cached audio on a
   ]);
   expect(await cardedPatternKeys(db)).toEqual(new Set(['ar-regular-present']));
 
+  await db.update(cards).set({ audioSentAt: 789 });
   await client.execute(`
     CREATE TRIGGER reject_card_update BEFORE UPDATE ON cards
     BEGIN SELECT RAISE(ABORT, 'unexpected card update'); END
@@ -126,11 +127,11 @@ test('persists inserted audio on every card kind and preserves cached audio on a
   expect(await storeCards(db, wordId, [
     { ...basic, audioFile: 'replacement.mp3', audioMp3: Buffer.from([255]) },
   ], [])).toEqual({ vocabCards: 0, conjugationCards: 0, updatedCards: 0 });
-  expect((await client.execute('SELECT audio_file, hex(audio_mp3) AS mp3_hex FROM cards ORDER BY id')).rows)
+  expect((await client.execute('SELECT audio_file, hex(audio_mp3) AS mp3_hex, audio_sent_at FROM cards ORDER BY id')).rows)
     .toEqual([
-      { audio_file: 'house.mp3', mp3_hex: '49443301' },
-      { audio_file: 'example.mp3', mp3_hex: '49443302' },
-      { audio_file: 'present.mp3', mp3_hex: '49443303' },
+      { audio_file: 'house.mp3', mp3_hex: '49443301', audio_sent_at: 789 },
+      { audio_file: 'example.mp3', mp3_hex: '49443302', audio_sent_at: 789 },
+      { audio_file: 'present.mp3', mp3_hex: '49443303', audio_sent_at: 789 },
     ]);
 });
 
@@ -140,7 +141,7 @@ test.each([
   { name: 'conjugation', card: present },
 ])('fills missing audio on an existing $name row without changing counts, claims, or metadata', async ({ card }) => {
   await db.insert(words).values({ id: 2, query: 'another word', info: '{}', lookedUpAt: 123 });
-  const existing = { ...storedGoodbye, deck: card.deck, kind: card.kind, front: card.front };
+  const existing = { ...storedGoodbye, deck: card.deck, kind: card.kind, front: card.front, audioSentAt: 789 };
   const otherDeck = { ...existing, id: 42, deck: 'Another deck' };
   const otherFront = { ...existing, id: 43, front: 'another front' };
   await db.insert(cards).values([existing, otherDeck, otherFront]);
@@ -156,8 +157,11 @@ test.each([
   }], [{ front: card.front, key: 'ar-regular-present' }])).toEqual({
     vocabCards: 0, conjugationCards: 0, updatedCards: 0,
   });
+  expect((await client.execute('SELECT id, audio_sent_at FROM cards ORDER BY id')).rows).toEqual([
+    { id: 41, audio_sent_at: null }, { id: 42, audio_sent_at: 789 }, { id: 43, audio_sent_at: 789 },
+  ]);
   expect(await db.select().from(cards).orderBy(cards.id)).toEqual([
-    { ...existing, audioFile: 'new.mp3', audioMp3: Buffer.from([73, 68, 51, 4]) },
+    { ...existing, audioFile: 'new.mp3', audioMp3: Buffer.from([73, 68, 51, 4]), audioSentAt: null },
     otherDeck, otherFront,
   ]);
   expect(await db.select().from(conjugationPatterns)).toEqual([]);
@@ -167,7 +171,7 @@ test.each([
   { name: 'omitted', audio: {} },
   { name: 'null', audio: { audioFile: null, audioMp3: null } },
 ])('leaves an existing row untouched when audio is $name', async ({ audio }) => {
-  await db.insert(cards).values(storedGoodbye);
+  await db.insert(cards).values({ ...storedGoodbye, audioSentAt: 789 });
   await client.execute(`
     CREATE TRIGGER reject_card_update BEFORE UPDATE ON cards
     BEGIN SELECT RAISE(ABORT, 'unexpected card update'); END
@@ -176,7 +180,7 @@ test.each([
   expect(await storeCards(db, wordId, [{ ...folded, ...audio }], [])).toEqual({
     vocabCards: 0, conjugationCards: 0, updatedCards: 0,
   });
-  expect(await db.select().from(cards)).toEqual([storedGoodbye]);
+  expect(await db.select().from(cards)).toEqual([{ ...storedGoodbye, audioSentAt: 789 }]);
 });
 
 test.each([
@@ -191,12 +195,15 @@ test.each([
   { name: 'null', audio: { audioFile: null, audioMp3: null }, expected: { audioFile: null, audioMp3: null } },
 ])('persists $name audio on a folded update with the existing count and metadata', async ({ audio, expected }) => {
   await db.insert(cards).values({
-    ...storedGoodbye, audioFile: 'original.mp3', audioMp3: Buffer.from([73, 68, 51, 0]),
+    ...storedGoodbye, audioFile: 'original.mp3', audioMp3: Buffer.from([73, 68, 51, 0]), audioSentAt: 789,
   });
 
   expect(await storeCards(db, wordId, [{ ...folded, ...audio }], [], 41)).toEqual({
     vocabCards: 0, conjugationCards: 0, updatedCards: 1,
   });
+  expect((await client.execute('SELECT back, audio_sent_at FROM cards')).rows).toEqual([
+    { back: '¡Adiós! / ¡Chao!', audio_sent_at: null },
+  ]);
   expect(await db.select().from(cards)).toEqual([{
     ...storedGoodbye, back: '¡Adiós! / ¡Chao!',
     forms: [{ spanish: '¡Adiós!', query: '¡adiós!' }, { spanish: '¡Chao!', query: '¡chao!' }],
@@ -226,10 +233,10 @@ test.each([
 ])('preserves cached audio when only fold forms change and replacement audio is $name', async ({ audio }) => {
   await db.insert(cards).values({
     ...storedGoodbye, back: '¡Adiós! / ¡Chao!',
-    audioFile: 'original.mp3', audioMp3: Buffer.from([73, 68, 51, 0]),
+    audioFile: 'original.mp3', audioMp3: Buffer.from([73, 68, 51, 0]), audioSentAt: 789,
   });
   await client.execute(`
-    CREATE TRIGGER reject_audio_update BEFORE UPDATE OF audio_file, audio_mp3 ON cards
+    CREATE TRIGGER reject_audio_update BEFORE UPDATE OF audio_file, audio_mp3, audio_sent_at ON cards
     BEGIN SELECT RAISE(ABORT, 'unexpected audio update'); END
   `);
 
@@ -239,7 +246,7 @@ test.each([
   expect(await db.select().from(cards)).toEqual([{
     ...storedGoodbye, back: '¡Adiós! / ¡Chao!',
     forms: [{ spanish: '¡Adiós!', query: '¡adiós!' }, { spanish: '¡Chao!', query: '¡chao!' }],
-    audioFile: 'original.mp3', audioMp3: Buffer.from([73, 68, 51, 0]),
+    audioFile: 'original.mp3', audioMp3: Buffer.from([73, 68, 51, 0]), audioSentAt: 789,
   }]);
 });
 
@@ -248,7 +255,7 @@ test.each([
   { name: 'cached', audio: { audioFile: 'original.mp3', audioMp3: Buffer.from([73, 68, 51]) } },
 ])('writes supplied audio on an unchanged fold with $name audio without counting an update', async ({ audio }) => {
   const storedFold = {
-    ...storedGoodbye, back: '¡Adiós! / ¡Chao!', ...audio,
+    ...storedGoodbye, back: '¡Adiós! / ¡Chao!', ...audio, audioSentAt: 789,
     forms: [{ spanish: '¡Adiós!', query: '¡adiós!' }, { spanish: '¡Chao!', query: '¡chao!' }],
   };
   await db.insert(cards).values(storedFold);
@@ -261,8 +268,10 @@ test.each([
   expect(await storeCards(db, wordId, [
     { ...folded, audioFile: 'replacement.mp3', audioMp3: Buffer.from([255]) },
   ], [], 41)).toEqual({ vocabCards: 0, conjugationCards: 0, updatedCards: 0 });
+  expect((await client.execute('SELECT audio_file, hex(audio_mp3) AS mp3_hex, audio_sent_at FROM cards')).rows)
+    .toEqual([{ audio_file: 'replacement.mp3', mp3_hex: 'FF', audio_sent_at: null }]);
   expect(await db.select().from(cards)).toEqual([{
-    ...storedFold, audioFile: 'replacement.mp3', audioMp3: Buffer.from([255]),
+    ...storedFold, audioFile: 'replacement.mp3', audioMp3: Buffer.from([255]), audioSentAt: null,
   }]);
 });
 
@@ -272,7 +281,7 @@ test.each([
     { spanish: '¡Adiós!', query: '¡adiós!' }, { spanish: '¡Chao!', query: '¡chao!' },
   ] },
 ])('propagates an audio write failure on a $name and retains committed rows', async ({ foldedCardId, back, forms }) => {
-  const existing = { ...storedGoodbye, back, forms };
+  const existing = { ...storedGoodbye, back, forms, audioSentAt: 789 };
   const cached = { ...storedGoodbye, id: 42, front: 'cached', audioFile: 'cached.mp3', audioMp3: Buffer.from([3]) };
   await db.insert(cards).values([existing, cached]);
   await client.execute(`
@@ -293,7 +302,7 @@ test.each([
     { spanish: '¡Adiós!', query: '¡adiós!' }, { spanish: '¡Chao!', query: '¡chao!' },
   ] },
 ])('reports an audio update returning no rows on a $name and rolls back the batch', async ({ foldedCardId, back, forms }) => {
-  const existing = { ...storedGoodbye, back, forms };
+  const existing = { ...storedGoodbye, back, forms, audioSentAt: 789 };
   await db.insert(cards).values(existing);
   await client.execute(`
     CREATE TRIGGER ignore_audio_update BEFORE UPDATE OF audio_file, audio_mp3 ON cards
@@ -312,7 +321,7 @@ test.each([
     { spanish: '¡Adiós!', query: '¡adiós!' }, { spanish: '¡Chao!', query: '¡chao!' },
   ] },
 ])('rolls back audio on a $name when a later pattern claim fails', async ({ foldedCardId, back, forms }) => {
-  const existing = { ...storedGoodbye, back, forms };
+  const existing = { ...storedGoodbye, back, forms, audioSentAt: 789 };
   await db.insert(cards).values(existing);
   await client.execute(`
     CREATE TRIGGER reject_pattern BEFORE INSERT ON conjugation_patterns
@@ -494,7 +503,7 @@ test.each([
 ])('does not issue an update or count one when the back and recorded forms are identical and audio is $name', async ({ audio }) => {
   const storedFold = { ...storedGoodbye, back: '¡Adiós! / ¡Chao!', forms: [
     { spanish: '¡Adiós!', query: '¡adiós!' }, { spanish: '¡Chao!', query: '¡chao!' },
-  ], audioFile: 'original.mp3', audioMp3: Buffer.from([73, 68, 51]) };
+  ], audioFile: 'original.mp3', audioMp3: Buffer.from([73, 68, 51]), audioSentAt: 789 };
   await db.insert(cards).values(storedFold);
   await client.execute(`
     CREATE TRIGGER reject_card_update BEFORE UPDATE ON cards
@@ -504,6 +513,8 @@ test.each([
   expect(await storeCards(db, wordId, [{ ...folded, ...audio }], [], 41)).toEqual({
     vocabCards: 0, conjugationCards: 0, updatedCards: 0,
   });
+  expect((await client.execute('SELECT audio_file, hex(audio_mp3) AS mp3_hex, audio_sent_at FROM cards')).rows)
+    .toEqual([{ audio_file: 'original.mp3', mp3_hex: '494433', audio_sent_at: 789 }]);
   expect(await db.select().from(cards)).toEqual([storedFold]);
 });
 

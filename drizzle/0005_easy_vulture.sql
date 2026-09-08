@@ -1,0 +1,1 @@
+ALTER TABLE `cards` ADD `audio_sent_at` integer;

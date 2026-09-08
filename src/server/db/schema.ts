@@ -28,6 +28,7 @@ export const cards = sqliteTable(
     forms: text("forms", { mode: "json" }).$type<{ spanish: string; query: string }[]>(),
     audioFile: text("audio_file"),
     audioMp3: blob("audio_mp3", { mode: "buffer" }),
+    audioSentAt: integer("audio_sent_at"),
     ankiNoteId: integer("anki_note_id"),
     sentAt: integer("sent_at"),
     declinedAt: integer("declined_at"),
