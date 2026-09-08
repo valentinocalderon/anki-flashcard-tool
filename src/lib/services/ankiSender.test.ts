@@ -56,6 +56,7 @@ let db: Db;
 
 beforeEach(async () => {
   vi.spyOn(Date, 'now').mockReturnValue(now);
+  vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockRejectedValue(new Error('Unexpected network request.')));
   databaseClient = createClient({ url: ':memory:' });
   db = createDb(databaseClient);
   await applyMigrations(db);
@@ -78,6 +79,8 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  expect(fetch).not.toHaveBeenCalled();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
   databaseClient.close();
 });
@@ -686,3 +689,40 @@ test.each(['not JSON', '[1]', '{}'])(
     expect(await db.select().from(cards).orderBy(cards.id)).toEqual(before);
   },
 );
+
+test.each([
+  { cached: false, back: 'casa (house)<br>(The house is big.)' },
+  { cached: true, back: 'casa (house)<br>(The house is big.) [sound:stored.mp3]' },
+])('fresh sendPending preserves the example br Back with cached audio: $cached', async ({ cached, back }) => {
+  await db.update(cards).set({
+    back: 'casa (house)<br>(The house is big.)',
+    ...(cached ? { audioFile: 'example.mp3', audioMp3: Buffer.from([73, 68, 51]) } : {}),
+  }).where(eq(cards.id, 20));
+  const fetchImpl = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(Response.json({ result: 1, error: null }))
+    .mockResolvedValueOnce(Response.json({ result: 2, error: null }));
+  if (cached) fetchImpl.mockResolvedValueOnce(Response.json({ result: 'stored.mp3', error: null }));
+  fetchImpl.mockResolvedValueOnce(Response.json({ result: [101, 102, 103], error: null }))
+    .mockResolvedValueOnce(Response.json({ result: null, error: null }));
+
+  expect(await sendPending(db, createAnkiClient('http://127.0.0.1:9876', fetchImpl))).toEqual({
+    status: 'sent', sent: 3, rejected: 0, pending: 0, syncedAt: 1800000000000, message: null,
+  });
+  expect(requestBody(fetchImpl.mock.calls[cached ? 3 : 2]?.[1])).toEqual({
+    action: 'addNotes', version: 6, params: { notes: [
+      { deckName: 'Spanish::Vocab', modelName: 'Basic (and reversed card)',
+        fields: { Front: 'house', Back: 'la casa' }, tags: ['auto-generated', 'vocab'],
+        options: { allowDuplicate: false, duplicateScope: 'deck' } },
+      { deckName: 'Spanish::Vocab', modelName: 'Basic',
+        fields: { Front: 'La ____ es grande.', Back: back }, tags: [],
+        options: { allowDuplicate: false, duplicateScope: 'deck' } },
+      { deckName: 'Spanish::Conjugation', modelName: 'Basic',
+        fields: { Front: 'Conjugate hablar', Back: 'yo: hablo' }, tags: ['conjugation'],
+        options: { allowDuplicate: false, duplicateScope: 'deck' } },
+    ] },
+  });
+  expect(await db.select({ back: cards.back, ankiNoteId: cards.ankiNoteId, sentAt: cards.sentAt })
+    .from(cards).where(eq(cards.id, 20)).get()).toEqual({
+    back: 'casa (house)<br>(The house is big.)', ankiNoteId: 102, sentAt: 1800000000000,
+  });
+});

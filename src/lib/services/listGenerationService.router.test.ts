@@ -80,17 +80,17 @@ test('the router builds one voice per request and shares its budget across all g
     { front: 'home', audioMp3: Buffer.from([73, 68, 51]) },
     { front: 'yes', audioMp3: null },
   ]);
-  expect(report).toEqual({ capReached: true, results: [
+  expect(report).toEqual({ audio: { unspeakable: 0, message: null }, capReached: true, results: [
     { word: 'casa', status: 'added', vocabCards: 1, conjugationCards: 0 },
     { word: 'hogar', status: 'added', vocabCards: 1, conjugationCards: 0 },
     { word: 'sí', status: 'added', vocabCards: 1, conjugationCards: 0 },
   ], send: { status: 'sent', sent: 3, rejected: 0, pending: 0, syncedAt: 123, message: null },
-  backfill: { status: 'nothing', sent: 0, rejected: 0, pending: 0, syncedAt: null, message: null } });
+  backfill: { status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null } });
 
-  expect(await caller.generateFromList({ text: 'árbol' })).toEqual({ capReached: false, results: [
+  expect(await caller.generateFromList({ text: 'árbol' })).toEqual({ audio: { unspeakable: 0, message: null }, capReached: false, results: [
     { word: 'árbol', status: 'added', vocabCards: 1, conjugationCards: 0 },
   ], send: { status: 'sent', sent: 1, rejected: 0, pending: 0, syncedAt: 456, message: null },
-  backfill: { status: 'nothing', sent: 0, rejected: 0, pending: 0, syncedAt: null, message: null } });
+  backfill: { status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null } });
   expect(createVoice).toHaveBeenCalledTimes(2);
   expect(createVoice).toHaveBeenNthCalledWith(2, { capCharacters: 30000 }, fetchImpl);
   const next = createVoice.mock.results[1];
@@ -146,9 +146,9 @@ test.each(['sendPending', 'retryDeclined'] as const)(
     const caller = ankiRouter.createCaller({ headers: new Headers() });
 
     expect(await caller.generateFromList({ text: 'sí' })).toEqual({
-      results: [{ word: 'sí', status: 'added', vocabCards: 1, conjugationCards: 0 }], capReached: true,
+      results: [{ word: 'sí', status: 'added', vocabCards: 1, conjugationCards: 0 }], capReached: true, audio: { unspeakable: 0, message: null },
       send: { status: 'sent', sent: 1, rejected: 0, pending: 0, syncedAt: 1800000000000, message: null },
-      backfill: { status: 'sent', sent: 1, rejected: 0, pending: 1, syncedAt: null, message: null },
+      backfill: { status: 'sent', sent: 1, rejected: 0, awaitingAudio: 1, unspeakable: 0, failureStage: null, message: null },
     });
     expect(createVoice).toHaveBeenCalledExactlyOnceWith({ capCharacters: 30000 }, fetchImpl);
     const firstVoice = createVoice.mock.results[0];
@@ -175,8 +175,8 @@ test.each(['sendPending', 'retryDeclined'] as const)(
       .mockResolvedValueOnce(ankiResponse('second.mp3'))
       .mockResolvedValueOnce(ankiResponse(null));
     expect(await caller[mutation]()).toEqual({
-      send: { status: 'nothing', sent: 0, rejected: 0, pending: 0, syncedAt: null, message: null },
-      backfill: { status: 'sent', sent: 1, rejected: 0, pending: 0, syncedAt: null, message: null },
+      capReached: false, send: { status: 'nothing', sent: 0, rejected: 0, pending: 0, syncedAt: null, message: null },
+      backfill: { status: 'sent', sent: 1, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null },
     });
     expect(createVoice).toHaveBeenCalledTimes(2);
     expect(createVoice).toHaveBeenNthCalledWith(2, { capCharacters: 30000 }, fetchImpl);
@@ -204,8 +204,8 @@ test('retryDeclined sends a previously declined card without cached audio and ba
   const caller = ankiRouter.createCaller({ headers: new Headers() });
 
   expect(await caller.retryDeclined()).toEqual({
-    send: { status: 'sent', sent: 1, rejected: 0, pending: 0, syncedAt: 1800000000000, message: null },
-    backfill: { status: 'sent', sent: 1, rejected: 0, pending: 0, syncedAt: null, message: null },
+    capReached: false, send: { status: 'sent', sent: 1, rejected: 0, pending: 0, syncedAt: 1800000000000, message: null },
+    backfill: { status: 'sent', sent: 1, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null },
   });
   expect(createVoice).toHaveBeenCalledExactlyOnceWith({ capCharacters: 30000 }, fetchImpl);
   const voice = createVoice.mock.results[0];
@@ -245,12 +245,12 @@ test.each(['generateFromList', 'sendPending', 'retryDeclined'] as const)(
     const caller = ankiRouter.createCaller({ headers: new Headers() });
     const run = () => mutation === 'generateFromList' ? caller.generateFromList({ text: 'casa' }) : caller[mutation]();
     const generation = mutation === 'generateFromList' ? {
-      results: [{ word: 'casa', status: 'skipped', vocabCards: 0, conjugationCards: 0 }], capReached: false,
+      results: [{ word: 'casa', status: 'skipped', vocabCards: 0, conjugationCards: 0 }], capReached: false, audio: { unspeakable: 0, message: null },
     } : {};
     expect(await run()).toEqual({
-      ...generation,
+      capReached: false, ...generation,
       send: { status: 'nothing', sent: 0, rejected: 0, pending: 0, syncedAt: null, message: null },
-      backfill: { status: 'sent', sent: 1, rejected: 0, pending: 0, syncedAt: null, message: null },
+      backfill: { status: 'sent', sent: 1, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null },
     });
     expect(requestBodies()).toEqual([
       { text: 'la casa', model_id: 'eleven_multilingual_v2' },
@@ -260,9 +260,9 @@ test.each(['generateFromList', 'sendPending', 'retryDeclined'] as const)(
       } } },
     ]);
     expect(await run()).toEqual({
-      ...generation,
+      capReached: false, ...generation,
       send: { status: 'nothing', sent: 0, rejected: 0, pending: 0, syncedAt: null, message: null },
-      backfill: { status: 'nothing', sent: 0, rejected: 0, pending: 0, syncedAt: null, message: null },
+      backfill: { status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null },
     });
     expect(fetchImpl).toHaveBeenCalledTimes(3);
 
@@ -273,9 +273,9 @@ test.each(['generateFromList', 'sendPending', 'retryDeclined'] as const)(
     }], [], 1)).toEqual({ vocabCards: 0, conjugationCards: 0, updatedCards: 1 });
     fetchImpl.mockResolvedValueOnce(ankiResponse('changed-stored.mp3')).mockResolvedValueOnce(ankiResponse(null));
     expect(await run()).toEqual({
-      ...generation,
+      capReached: false, ...generation,
       send: { status: 'nothing', sent: 0, rejected: 0, pending: 0, syncedAt: null, message: null },
-      backfill: { status: 'sent', sent: 1, rejected: 0, pending: 0, syncedAt: null, message: null },
+      backfill: { status: 'sent', sent: 1, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null },
     });
     expect(requestBodies().slice(3)).toEqual([
       { action: 'storeMediaFile', version: 6, params: { filename: 'changed.mp3', data: 'RA==' } },
@@ -291,20 +291,20 @@ test.each(['generateFromList', 'sendPending', 'retryDeclined'] as const)(
 
 const backfillFailures = [
   {
-    failure: 'Anki API error', status: 'failed', rejected: 1, pending: 1, message: 'note was not found: 102',
+    failure: 'Anki API error', status: 'failed', rejected: 1, awaitingAudio: 2, message: 'note was not found: 102',
     response: () => Promise.resolve(Response.json({ result: null, error: 'note was not found: 102' })),
   },
   {
-    failure: 'Anki timeout', status: 'anki_closed', rejected: 0, pending: 2, message: 'AnkiConnect request timed out: The operation timed out',
+    failure: 'Anki timeout', status: 'anki_closed', rejected: 0, awaitingAudio: 2, message: 'AnkiConnect request timed out: The operation timed out',
     response: () => Promise.reject(new DOMException('The operation timed out', 'TimeoutError')),
   },
   {
-    failure: 'Anki refused connection', status: 'anki_closed', rejected: 0, pending: 2,
+    failure: 'Anki refused connection', status: 'anki_closed', rejected: 0, awaitingAudio: 2,
     message: 'Anki is not running or cannot be reached. Open Anki and try again. AnkiConnect request failed: connect ECONNREFUSED',
     response: () => Promise.reject(new TypeError('connect ECONNREFUSED')),
   },
   {
-    failure: 'ElevenLabs HTTP error', status: 'failed', rejected: 0, pending: 2,
+    failure: 'ElevenLabs HTTP error', status: 'failed', rejected: 0, awaitingAudio: 2,
     message: 'ElevenLabs request returned HTTP 429: quota exceeded; check the response before retrying.',
     response: () => Promise.resolve(new Response('quota exceeded', { status: 429 })),
   },
@@ -312,7 +312,7 @@ const backfillFailures = [
 
 test.each(backfillFailures.flatMap((failure) => (['generateFromList', 'sendPending', 'retryDeclined'] as const)
   .map((mutation) => ({ ...failure, mutation }))))(
-  '$mutation preserves send and stored partial progress on $failure', async ({ mutation, failure, status, rejected, pending, message, response }) => {
+  '$mutation preserves send and stored partial progress on $failure', async ({ mutation, failure, status, rejected, awaitingAudio, message, response }) => {
     await seedHouse();
     await db.update(cards).set({ audioFile: 'first.mp3', audioMp3: Buffer.from([73]) }).where(eq(cards.id, 1));
     await db.insert(cards).values([
@@ -338,11 +338,12 @@ test.each(backfillFailures.flatMap((failure) => (['generateFromList', 'sendPendi
 
     expect(await (mutation === 'generateFromList' ? caller.generateFromList({ text: 'casa' }) : caller[mutation]()))
       .toEqual({
-        ...(mutation === 'generateFromList' ? {
-          results: [{ word: 'casa', status: 'skipped', vocabCards: 0, conjugationCards: 0 }], capReached: false,
+        capReached: false, ...(mutation === 'generateFromList' ? {
+          results: [{ word: 'casa', status: 'skipped', vocabCards: 0, conjugationCards: 0 }], capReached: false, audio: { unspeakable: 0, message: null },
         } : {}),
         send: { status: 'sent', sent: 1, rejected: 0, pending: 0, syncedAt: 1800000000000, message: null },
-        backfill: { status, sent: 1, rejected, pending, syncedAt: null, message },
+        backfill: { status, sent: 1, rejected, awaitingAudio, unspeakable: 0,
+          failureStage: failure === 'ElevenLabs HTTP error' ? 'synthesize' : 'updateNoteFields', message },
       });
     expect(await db.select({ id: cards.id, sentAt: cards.sentAt, audioSentAt: cards.audioSentAt })
       .from(cards).orderBy(cards.id)).toEqual([
@@ -370,14 +371,14 @@ test('the first post-migration pass counts cached audio already in Anki and does
   const caller = ankiRouter.createCaller({ headers: new Headers() });
 
   expect(await caller.generateFromList({ text: 'casa' })).toEqual({
-    results: [{ word: 'casa', status: 'skipped', vocabCards: 0, conjugationCards: 0 }], capReached: false,
+    results: [{ word: 'casa', status: 'skipped', vocabCards: 0, conjugationCards: 0 }], capReached: false, audio: { unspeakable: 0, message: null },
     send: { status: 'nothing', sent: 0, rejected: 0, pending: 0, syncedAt: null, message: null },
-    backfill: { status: 'sent', sent: 2, rejected: 0, pending: 0, syncedAt: null, message: null },
+    backfill: { status: 'sent', sent: 2, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null },
   });
   expect(await caller.generateFromList({ text: 'casa' })).toEqual({
-    results: [{ word: 'casa', status: 'skipped', vocabCards: 0, conjugationCards: 0 }], capReached: false,
+    results: [{ word: 'casa', status: 'skipped', vocabCards: 0, conjugationCards: 0 }], capReached: false, audio: { unspeakable: 0, message: null },
     send: { status: 'nothing', sent: 0, rejected: 0, pending: 0, syncedAt: null, message: null },
-    backfill: { status: 'nothing', sent: 0, rejected: 0, pending: 0, syncedAt: null, message: null },
+    backfill: { status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null },
   });
   expect(requestBodies()).toEqual([
     { action: 'storeMediaFile', version: 6, params: { filename: 'old.mp3', data: 'SQ==' } },
@@ -426,8 +427,8 @@ test.each([
   const caller = ankiRouter.createCaller({ headers: new Headers() });
 
   expect(await caller.retryDeclined()).toEqual({
-    send: { status, sent: 0, rejected: 0, pending: 1, syncedAt: null, message },
-    backfill: { status: 'nothing', sent: 0, rejected: 0, pending: 0, syncedAt: null, message: null },
+    capReached: false, send: { status, sent: 0, rejected: 0, pending: 1, syncedAt: null, message },
+    backfill: { status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null },
   });
   expect(await caller.declinedCount()).toBe(1);
   expect(await caller.pendingCount()).toBe(1);
@@ -449,4 +450,124 @@ test('retryDeclined still rejects an unexpected send result without starting bac
     storedHouse,
     { ...storedHouse, id: 2, front: 'declined', sentAt: null, ankiNoteId: null, declinedAt: 789 },
   ]);
+});
+
+test.each(['generateFromList', 'sendPending', 'retryDeclined', 'backfillAudio'] as const)(
+  '%s reports its cap and the current count of cards awaiting audio', async (mutation) => {
+    await seedHouse();
+    await db.update(cards).set({ back: 'a'.repeat(30001) }).where(eq(cards.id, 1));
+    const createVoice = vi.spyOn(spanishVoice, 'createSpanishVoice');
+    const caller = ankiRouter.createCaller({ headers: new Headers() });
+    expect(await caller.awaitingAudioCount()).toBe(1);
+
+    const report = await (mutation === 'generateFromList' ? caller.generateFromList({ text: 'casa' }) : caller[mutation]());
+
+    expect(report).toEqual({ capReached: true,
+      ...(mutation === 'generateFromList' ? { results: [
+        { word: 'casa', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
+      ], audio: { unspeakable: 0, message: null } } : {}),
+      ...(mutation === 'backfillAudio' ? {} : { send: {
+        status: 'nothing', sent: 0, rejected: 0, pending: 0, syncedAt: null, message: null,
+      } }),
+      backfill: { status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 1, unspeakable: 0, message: null, failureStage: null },
+    });
+    expect(await caller.awaitingAudioCount()).toBe(1);
+    expect(createVoice).toHaveBeenCalledExactlyOnceWith({ capCharacters: 30000 }, fetchImpl);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(openaiLookup).not.toHaveBeenCalled();
+  },
+);
+
+test('backfillAudio voices only sent cards and uses a fresh voice for the next request', async () => {
+  await seedHouse();
+  await db.insert(cards).values([
+    { ...storedHouse, id: 2, front: 'pending', sentAt: null, ankiNoteId: null },
+    { ...storedHouse, id: 3, front: 'declined', sentAt: null, ankiNoteId: null, declinedAt: 999 },
+  ]);
+  const createVoice = vi.spyOn(spanishVoice, 'createSpanishVoice');
+  const caller = ankiRouter.createCaller({ headers: new Headers() });
+  fetchImpl.mockResolvedValueOnce(new Response(new Uint8Array([73])))
+    .mockResolvedValueOnce(ankiResponse('house.mp3')).mockResolvedValueOnce(ankiResponse(null));
+
+  expect(await caller.backfillAudio()).toEqual({ capReached: false,
+    backfill: { status: 'sent', sent: 1, rejected: 0, awaitingAudio: 0, unspeakable: 0, message: null, failureStage: null },
+  });
+  expect(await caller.awaitingAudioCount()).toBe(0);
+  expect(await caller.pendingCount()).toBe(1);
+  expect(await caller.declinedCount()).toBe(1);
+  expect(requestBodies()).toEqual([
+    { text: 'la casa', model_id: 'eleven_multilingual_v2' },
+    { action: 'storeMediaFile', version: 6, params: { filename: houseAudio, data: 'SQ==' } },
+    { action: 'updateNoteFields', version: 6, params: { note: { id: 101, fields: { Back: 'la casa [sound:house.mp3]' } } } },
+  ]);
+  expect(await caller.backfillAudio()).toEqual({ capReached: false,
+    backfill: { status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 0, unspeakable: 0, message: null, failureStage: null },
+  });
+  expect(createVoice).toHaveBeenCalledTimes(2);
+  expect(createVoice.mock.results[0]?.value).not.toBe(createVoice.mock.results[1]?.value);
+  expect(fetchImpl).toHaveBeenCalledTimes(3);
+  expect(openaiLookup).not.toHaveBeenCalled();
+});
+
+test.each(backfillFailures)(
+  'backfillAudio reports $failure after an unspeakable card and preserves stored partial progress', async ({ failure, status, rejected, message, response }) => {
+    await seedHouse();
+    await db.insert(cards).values({ ...storedHouse, id: 0, front: 'unsupported', kind: 'conjugation', back: 'yo: <b>hablo</b>' });
+    await db.update(cards).set({ audioFile: 'first.mp3', audioMp3: Buffer.from([73]) }).where(eq(cards.id, 1));
+    await db.insert(cards).values({ ...storedHouse, id: 2, front: 'second', ankiNoteId: 102,
+      ...(failure === 'ElevenLabs HTTP error' ? {} : { audioFile: 'second.mp3', audioMp3: Buffer.from([68]) }) });
+    fetchImpl.mockResolvedValueOnce(ankiResponse('first.mp3')).mockResolvedValueOnce(ankiResponse(null));
+    if (failure !== 'ElevenLabs HTTP error') fetchImpl.mockResolvedValueOnce(ankiResponse('second.mp3'));
+    fetchImpl.mockImplementationOnce(async () => {
+      await db.insert(cards).values({ ...storedHouse, id: 3, front: 'arrived during failure', ankiNoteId: 103 });
+      return response();
+    });
+    const caller = ankiRouter.createCaller({ headers: new Headers() });
+
+    expect(await caller.backfillAudio()).toEqual({ capReached: false, backfill: {
+      status, sent: 1, rejected, awaitingAudio: 3, unspeakable: 1, message,
+      failureStage: failure === 'ElevenLabs HTTP error' ? 'synthesize' : 'updateNoteFields',
+    } });
+    expect(await caller.awaitingAudioCount()).toBe(3);
+    expect(await db.select({ id: cards.id, audioSentAt: cards.audioSentAt }).from(cards).orderBy(cards.id)).toEqual([
+      { id: 0, audioSentAt: null },
+      { id: 1, audioSentAt: 1800000000000 }, { id: 2, audioSentAt: null }, { id: 3, audioSentAt: null },
+    ]);
+    expect(openaiLookup).not.toHaveBeenCalled();
+  },
+);
+
+test('generation carries both unspeakable reports while saving and sending the silent card', async () => {
+  vi.mocked(openaiLookup).mockResolvedValueOnce({ ...wordInfo, spanish: '<b>sí</b>' });
+  fetchImpl.mockResolvedValueOnce(ankiResponse(1)).mockResolvedValueOnce(ankiResponse([101]))
+    .mockResolvedValueOnce(ankiResponse(null));
+  const caller = ankiRouter.createCaller({ headers: new Headers() });
+
+  expect(await caller.generateFromList({ text: 'sí' })).toEqual({ capReached: false,
+    results: [{ word: 'sí', status: 'added', vocabCards: 1, conjugationCards: 0 }],
+    audio: { unspeakable: 1,
+      message: 'Unsupported card audio HTML tag "<b>"; check cardGenerator output (expected plain text with <br> separators only).' },
+    send: { status: 'sent', sent: 1, rejected: 0, pending: 0, syncedAt: 1800000000000, message: null },
+    backfill: { status: 'failed', sent: 0, rejected: 0, awaitingAudio: 1, unspeakable: 1, failureStage: 'prepare',
+      message: 'Unsupported card audio HTML tag "<b>"; check cardGenerator output (expected plain text with <br> separators only).' },
+  });
+  expect(await caller.awaitingAudioCount()).toBe(1);
+  expect(await db.select({ back: cards.back, ankiNoteId: cards.ankiNoteId, sentAt: cards.sentAt,
+    audioMp3: cards.audioMp3, audioSentAt: cards.audioSentAt }).from(cards)).toEqual([
+    { back: '<b>sí</b>', ankiNoteId: 101, sentAt: 1800000000000, audioMp3: null, audioSentAt: null },
+  ]);
+  expect(requestBodies()).toEqual([
+    { action: 'createDeck', version: 6, params: { deck: 'Spanish::Vocab' } },
+    { action: 'addNotes', version: 6, params: { notes: [{ deckName: 'Spanish::Vocab', modelName: 'Basic (and reversed card)',
+      fields: { Front: 'yes', Back: '<b>sí</b>' }, tags: ['auto-generated'], options: { allowDuplicate: false, duplicateScope: 'deck' } }] } },
+    { action: 'sync', version: 6, params: {} },
+  ]);
+});
+
+test('awaitingAudioCount reports its observed store failure instead of returning zero', async () => {
+  vi.spyOn(db, '$count').mockImplementationOnce(() => { throw new Error('audio count read failed'); });
+  const caller = ankiRouter.createCaller({ headers: new Headers() });
+
+  await expect(caller.awaitingAudioCount()).rejects.toThrow('audio count read failed');
+  expect(fetchImpl).not.toHaveBeenCalled();
 });

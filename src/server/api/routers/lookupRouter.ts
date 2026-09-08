@@ -4,8 +4,8 @@ import { createAnkiClient } from '@/lib/anki/ankiConnect';
 import { loadConfig } from '@/lib/config';
 import { openaiLookup } from '@/lib/services/aiLookup';
 import { declinedCount, retryDeclined, sendPending, type SendReport } from '@/lib/services/ankiSender';
-import { backfillSentAudio } from '@/lib/services/audioBackfill';
-import { generateForWords } from '@/lib/services/listGenerationService';
+import { awaitingAudioCount, backfillSentAudio, type AudioBackfillReport } from '@/lib/services/audioBackfill';
+import { generateForWords, type GenerationAudioReport } from '@/lib/services/listGenerationService';
 import { createSpanishVoice } from '@/lib/services/spanishVoice';
 import type { WordResult } from '@/lib/types';
 import { createTRPCRouter, publicProcedure } from '@/server/api/trpc';
@@ -16,7 +16,7 @@ export const ankiRouter = createTRPCRouter({
   generateFromList: publicProcedure
     .input(z.object({ text: z.string().min(1) }))
     .mutation(async ({ input }): Promise<{
-      results: WordResult[]; capReached: boolean; send: SendReport; backfill: SendReport;
+      results: WordResult[]; capReached: boolean; audio: GenerationAudioReport; send: SendReport; backfill: AudioBackfillReport;
     }> => {
       const db = await getDb();
       const client = createAnkiClient(loadConfig().anki.url);
@@ -35,21 +35,32 @@ export const ankiRouter = createTRPCRouter({
       const backfill = await backfillSentAudio(db, client, voice);
       return { ...generation, capReached: voice.capReached, send, backfill };
     }),
-  sendPending: publicProcedure.mutation(async (): Promise<{ send: SendReport; backfill: SendReport }> => {
+  sendPending: publicProcedure.mutation(async (): Promise<{ send: SendReport; backfill: AudioBackfillReport; capReached: boolean }> => {
     const db = await getDb();
     const client = createAnkiClient(loadConfig().anki.url);
     const voice = createSpanishVoice(loadConfig().audio, fetch);
     const send = await sendPending(db, client);
     const backfill = await backfillSentAudio(db, client, voice);
-    return { send, backfill };
+    return { send, backfill, capReached: voice.capReached };
   }),
-  retryDeclined: publicProcedure.mutation(async (): Promise<{ send: SendReport; backfill: SendReport }> => {
+  retryDeclined: publicProcedure.mutation(async (): Promise<{ send: SendReport; backfill: AudioBackfillReport; capReached: boolean }> => {
     const db = await getDb();
     const client = createAnkiClient(loadConfig().anki.url);
     const voice = createSpanishVoice(loadConfig().audio, fetch);
     const send = await retryDeclined(db, client);
     const backfill = await backfillSentAudio(db, client, voice);
-    return { send, backfill };
+    return { send, backfill, capReached: voice.capReached };
+  }),
+  backfillAudio: publicProcedure.mutation(async (): Promise<{ backfill: AudioBackfillReport; capReached: boolean }> => {
+    const db = await getDb();
+    const client = createAnkiClient(loadConfig().anki.url);
+    const voice = createSpanishVoice(loadConfig().audio, fetch);
+    const backfill = await backfillSentAudio(db, client, voice);
+    return { backfill, capReached: voice.capReached };
+  }),
+  awaitingAudioCount: publicProcedure.query(async (): Promise<number> => {
+    const db = await getDb();
+    return awaitingAudioCount(db);
   }),
   declinedCount: publicProcedure.query(async (): Promise<number> => {
     const db = await getDb();

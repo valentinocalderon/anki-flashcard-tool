@@ -3,20 +3,22 @@
 import { useState } from 'react';
 import { formatResultLine } from '@/lib/resultLine';
 import type { SendReport } from '@/lib/services/ankiSender';
+import type { AudioBackfillReport } from '@/lib/services/audioBackfill';
 import type { WordResult } from '@/lib/types';
 import { api } from '@/trpc/react';
 
 function useAnkiRun() {
   const [sendReport, setSendReport] = useState<SendReport | null>(null);
   const [results, setResults] = useState<WordResult[]>([]);
-  const [backfillReport, setBackfillReport] = useState<SendReport | null>(null);
+  const [backfillReport, setBackfillReport] = useState<AudioBackfillReport | null>(null);
   const pendingCount = api.anki.pendingCount.useQuery();
   const declinedCount = api.anki.declinedCount.useQuery();
+  const awaitingAudioCount = api.anki.awaitingAudioCount.useQuery();
   const refreshCounts = async () => {
-    await Promise.all([pendingCount.refetch(), declinedCount.refetch()]);
+    await Promise.all([pendingCount.refetch(), declinedCount.refetch(), awaitingAudioCount.refetch()]);
   };
   const sendOptions = {
-    onSuccess: ({ send, backfill }: { send: SendReport; backfill: SendReport }) => {
+    onSuccess: ({ send, backfill }: { send: SendReport; backfill: AudioBackfillReport }) => {
       setSendReport(send);
       setBackfillReport(backfill);
     },
@@ -27,6 +29,7 @@ function useAnkiRun() {
     onMutate: () => {
       generation.reset();
       retrying.reset();
+      voicing.reset();
       setSendReport(null);
       setBackfillReport(null);
     },
@@ -36,14 +39,27 @@ function useAnkiRun() {
     onMutate: () => {
       generation.reset();
       sending.reset();
+      voicing.reset();
       setSendReport(null);
       setBackfillReport(null);
     },
+  });
+  const voicing = api.anki.backfillAudio.useMutation({
+    onMutate: () => {
+      generation.reset();
+      sending.reset();
+      retrying.reset();
+      setSendReport(null);
+      setBackfillReport(null);
+    },
+    onSuccess: ({ backfill }) => setBackfillReport(backfill),
+    onSettled: refreshCounts,
   });
   const generation = api.anki.generateFromList.useMutation({
     onMutate: () => {
       sending.reset();
       retrying.reset();
+      voicing.reset();
       setSendReport(null);
       setBackfillReport(null);
       setResults([]);
@@ -56,15 +72,16 @@ function useAnkiRun() {
     onSettled: refreshCounts,
   });
   return {
-    sendReport, backfillReport, results, pendingCount, declinedCount, generation, sending, retrying,
-    isPending: generation.isPending || sending.isPending || retrying.isPending,
+    sendReport, backfillReport, results, pendingCount, declinedCount, awaitingAudioCount, generation, sending, retrying, voicing,
+    isPending: generation.isPending || sending.isPending || retrying.isPending || voicing.isPending,
+    capReached: [generation.data, sending.data, retrying.data, voicing.data].some((report) => report?.capReached === true),
   };
 }
 
 export default function HomePage() {
   const [text, setText] = useState('');
   const {
-    sendReport, backfillReport, results, pendingCount, declinedCount, generation, sending, retrying, isPending,
+    sendReport, backfillReport, results, pendingCount, declinedCount, awaitingAudioCount, generation, sending, retrying, voicing, isPending, capReached,
   } = useAnkiRun();
 
   return (
@@ -105,6 +122,12 @@ export default function HomePage() {
       {retrying.error && (
         <p role="alert" className="text-red-600">{retrying.error.message}</p>
       )}
+      {voicing.error && (
+        <p role="alert" className="text-red-600">{voicing.error.message}</p>
+      )}
+      {awaitingAudioCount.error && (
+        <p role="alert" className="text-red-600">{awaitingAudioCount.error.message}</p>
+      )}
       {pendingCount.error && (
         <p role="alert" className="text-red-600">{pendingCount.error.message}</p>
       )}
@@ -114,8 +137,14 @@ export default function HomePage() {
       {generation.isSuccess && results.length === 0 && (
         <p aria-live="polite">No words found in the text.</p>
       )}
-      {generation.data?.capReached && (
+      {capReached && (
         <p aria-live="polite" className="text-sm mb-3">Audio cap reached for this run.</p>
+      )}
+      {generation.data && generation.data.audio.unspeakable > 0 && (
+        <>
+          <p>During generation, {generation.data.audio.unspeakable} {pluralise(generation.data.audio.unspeakable, 'card', 'cards')} could not be spoken.</p>
+          <p role="alert" className="text-red-600">{generation.data.audio.message}</p>
+        </>
       )}
       <ul aria-live="polite" className="text-sm space-y-2">
         {results.map((result, index) => <ResultLine key={index} result={result} />)}
@@ -125,9 +154,11 @@ export default function HomePage() {
         backfill={backfillReport}
         pendingCount={pendingCount.data}
         declinedCount={declinedCount.data ?? 0}
+        awaitingAudioCount={awaitingAudioCount.data}
         isPending={isPending}
         onSend={() => sending.mutate()}
         onRetry={() => retrying.mutate()}
+        onVoice={() => voicing.mutate()}
       />
     </main>
   );
@@ -137,20 +168,23 @@ function pluralise(count: number, singular: string, plural: string) {
   return count === 1 ? singular : plural;
 }
 
-function SendFooter({ report, backfill, pendingCount, declinedCount, isPending, onSend, onRetry }: {
+function SendFooter({ report, backfill, pendingCount, declinedCount, awaitingAudioCount, isPending, onSend, onRetry, onVoice }: {
   report: SendReport | null;
-  backfill: SendReport | null;
+  backfill: AudioBackfillReport | null;
   pendingCount: number | undefined;
   declinedCount: number;
+  awaitingAudioCount: number | undefined;
   isPending: boolean;
   onSend: () => void;
   onRetry: () => void;
+  onVoice: () => void;
 }) {
+  const awaitingAudio = awaitingAudioCount ?? backfill?.awaitingAudio ?? 0;
   const waiting = pendingCount ?? report?.pending ?? 0;
   const hasReport = report?.status === 'sent' || report?.status === 'failed' || report?.status === 'anki_closed';
   const backfillFailed = backfill?.status === 'failed' || backfill?.status === 'anki_closed';
   const backfilled = backfill?.sent ?? 0;
-  if (!hasReport && !backfillFailed && backfilled === 0 && waiting === 0 && declinedCount === 0) {
+  if (!hasReport && !backfillFailed && backfilled === 0 && waiting === 0 && declinedCount === 0 && awaitingAudio === 0) {
     return null;
   }
 
@@ -189,6 +223,12 @@ function SendFooter({ report, backfill, pendingCount, declinedCount, isPending, 
       {backfillFailed && (
         <p role="alert" className="text-red-600">Audio backfill failed: {backfill.message}</p>
       )}
+      {backfill && backfill.unspeakable > 0 && (
+        <p>During audio backfill, {backfill.unspeakable} {pluralise(backfill.unspeakable, 'card', 'cards')} could not be spoken.</p>
+      )}
+      {backfill && backfill.rejected > 0 && (
+        <p>Anki declined audio for {backfill.rejected} {pluralise(backfill.rejected, 'card', 'cards')}.</p>
+      )}
       {waiting > 0 && (
         <div className="bg-gray-100 p-3 rounded space-y-3">
           <p>
@@ -213,6 +253,19 @@ function SendFooter({ report, backfill, pendingCount, declinedCount, isPending, 
         >
           Retry {declinedCount} declined {pluralise(declinedCount, 'card', 'cards')}
         </button>
+      )}
+      {awaitingAudio > 0 && (
+        <div className="bg-gray-100 p-3 rounded space-y-3">
+          <p>{awaitingAudio} {pluralise(awaitingAudio, 'card is', 'cards are')} waiting for audio.</p>
+          <button
+            type="button"
+            disabled={isPending}
+            onClick={onVoice}
+            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Voice {awaitingAudio} {pluralise(awaitingAudio, 'card', 'cards')} waiting for audio
+          </button>
+        </div>
       )}
     </footer>
   );

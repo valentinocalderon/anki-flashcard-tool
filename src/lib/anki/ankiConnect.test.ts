@@ -179,7 +179,7 @@ test('an unexpected send failure preserves word results and counts only pending 
     vi.doMock('@/lib/services/listGenerationService', () => ({
       generateForWords: vi.fn<typeof generateForWords>().mockImplementation(async (...args) => {
         await args[4].synthesize('a'.repeat(30001));
-        return { results, capReached: true };
+        return { results, capReached: true, audio: { unspeakable: 0, message: null } };
       }),
     }));
     vi.doMock('@/lib/services/ankiSender', async (importOriginal) => ({
@@ -192,12 +192,12 @@ test('an unexpected send failure preserves word results and counts only pending 
     expect(await caller.pendingCount()).toBe(1);
     expect(await caller.generateFromList({ text: 'casa' })).toEqual({
       results,
-      capReached: true,
+      capReached: true, audio: { unspeakable: 0, message: null },
       send: {
         status: 'failed', sent: 0, rejected: 0, pending: 1,
         syncedAt: null, message: 'Unexpected send failure',
       },
-      backfill: { status: 'nothing', sent: 0, rejected: 0, pending: 0, syncedAt: null, message: null },
+      backfill: { status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null },
     });
     expect(fetch).not.toHaveBeenCalled();
   } finally {

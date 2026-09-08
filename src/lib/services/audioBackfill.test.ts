@@ -6,7 +6,7 @@ import { loadConfig } from '@/lib/config';
 import { applyMigrations, createDb, type Db } from '@/server/db';
 import { cards, words } from '@/server/db/schema';
 import { sendPending } from './ankiSender';
-import { backfillSentAudio } from './audioBackfill';
+import { awaitingAudioCount, backfillSentAudio } from './audioBackfill';
 import { storeCards } from './cardStore';
 import { createSpanishVoice } from './spanishVoice';
 
@@ -67,7 +67,7 @@ test('voices a sent card, caches its bytes, uploads and updates Back, and pushes
   const client = createAnkiClient(url, ankiFetch);
 
   expect(await backfillSentAudio(db, client, voice)).toEqual({
-    status: 'sent', sent: 1, rejected: 0, pending: 0, syncedAt: null, message: null,
+    status: 'sent', sent: 1, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null,
   });
   expect(voiceFetch).toHaveBeenCalledExactlyOnceWith(
     'https://api.elevenlabs.io/v1/text-to-speech/test-voice-id?output_format=mp3_44100_128',
@@ -84,7 +84,7 @@ test('voices a sent card, caches its bytes, uploads and updates Back, and pushes
     ...storedHouse, audioFile, audioMp3: Buffer.from([73, 68, 51, 0, 255]), audioSentAt: 1800000000000,
   });
   expect(await backfillSentAudio(db, client, voice)).toEqual({
-    status: 'nothing', sent: 0, rejected: 0, pending: 0, syncedAt: null, message: null,
+    status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null,
   });
   expect(voiceFetch).toHaveBeenCalledOnce();
   expect(ankiFetch).toHaveBeenCalledTimes(2);
@@ -107,7 +107,7 @@ test('pushes cached audio in id order without speech and excludes rows missing s
     .mockResolvedValueOnce(Response.json({ result: null, error: null }));
 
   expect(await backfillSentAudio(db, createAnkiClient(url, ankiFetch), createSpanishVoice(loadConfig().audio, voiceFetch)))
-    .toEqual({ status: 'sent', sent: 2, rejected: 0, pending: 0, syncedAt: null, message: null });
+    .toEqual({ status: 'sent', sent: 2, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null });
   expect(voiceFetch).not.toHaveBeenCalled();
   expect(ankiFetch.mock.calls.map(([, init]) => requestBody(init))).toEqual([
     { action: 'storeMediaFile', version: 6, params: { filename: 'first.mp3', data: 'SUQz' } },
@@ -147,7 +147,7 @@ test.each([
     .mockResolvedValueOnce(Response.json({ result: null, error: null }));
 
   expect(await backfillSentAudio(db, createAnkiClient(url, ankiFetch), createSpanishVoice(loadConfig().audio, voiceFetch)))
-    .toEqual({ status: 'sent', sent: 1, rejected: 0, pending: 0, syncedAt: null, message: null });
+    .toEqual({ status: 'sent', sent: 1, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null });
   expect(requestBody(voiceFetch.mock.calls[0]?.[1])).toEqual({ text, model_id: 'eleven_multilingual_v2' });
   expect(ankiFetch.mock.calls.map(([, init]) => requestBody(init))).toEqual([
     { action: 'storeMediaFile', version: 6, params: {
@@ -186,7 +186,7 @@ test('shares the existing voice budget, pushes cached audio after cap denial, an
   const client = createAnkiClient(url, ankiFetch);
 
   expect(await backfillSentAudio(db, client, voice)).toEqual({
-    status: 'sent', sent: 2, rejected: 0, pending: 2, syncedAt: null, message: null,
+    status: 'sent', sent: 2, rejected: 0, awaitingAudio: 2, unspeakable: 0, failureStage: null, message: null,
   });
   expect(voice.dispatchedCharacters).toBe(29997);
   expect(voice.capReached).toBe(true);
@@ -203,18 +203,18 @@ test('shares the existing voice budget, pushes cached audio after cap denial, an
   ]);
   expect(await db.select().from(cards).where(inArray(cards.id, [20, 30])).orderBy(cards.id)).toEqual(remaining);
   expect(await backfillSentAudio(db, client, voice)).toEqual({
-    status: 'nothing', sent: 0, rejected: 0, pending: 2, syncedAt: null, message: null,
+    status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 2, unspeakable: 0, failureStage: null, message: null,
   });
   expect(voiceFetch).toHaveBeenCalledTimes(2);
   expect(ankiFetch).toHaveBeenCalledTimes(4);
   expect(await backfillSentAudio(db, client, createSpanishVoice(loadConfig().audio, voiceFetch))).toEqual({
-    status: 'sent', sent: 2, rejected: 0, pending: 0, syncedAt: null, message: null,
+    status: 'sent', sent: 2, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null,
   });
   expect(voiceFetch).toHaveBeenCalledTimes(4);
   expect(ankiFetch).toHaveBeenCalledTimes(8);
 });
 
-test('skips CardAudioError without failing the report, pushes following cards, and retries after text correction', async () => {
+test('reports CardAudioError as unspeakable, pushes following cards, and retries after text correction', async () => {
   const unsupported = { ...storedHouse, kind: 'conjugation' as const, back: 'yo: <b>hablo</b>' };
   const cached = {
     ...storedHouse, id: 20, front: 'cached', ankiNoteId: 202, audioFile: 'cached.mp3', audioMp3: Buffer.from([73]),
@@ -230,7 +230,8 @@ test('skips CardAudioError without failing the report, pushes following cards, a
   const voice = createSpanishVoice(loadConfig().audio, voiceFetch);
 
   expect(await backfillSentAudio(db, client, voice)).toEqual({
-    status: 'sent', sent: 1, rejected: 0, pending: 1, syncedAt: null, message: null,
+    status: 'failed', sent: 1, rejected: 0, awaitingAudio: 1, unspeakable: 1, failureStage: 'prepare',
+    message: 'Unsupported card audio HTML tag "<b>"; check cardGenerator output (expected plain text with <br> separators only).',
   });
   expect(await db.select().from(cards).orderBy(cards.id)).toEqual([
     unsupported, { ...cached, audioSentAt: 1800000000000 },
@@ -240,7 +241,7 @@ test('skips CardAudioError without failing the report, pushes following cards, a
 
   await db.update(cards).set({ back: 'yo: hablo<br>tú: hablas' }).where(eq(cards.id, 10));
   expect(await backfillSentAudio(db, client, voice)).toEqual({
-    status: 'sent', sent: 1, rejected: 0, pending: 0, syncedAt: null, message: null,
+    status: 'sent', sent: 1, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null,
   });
   expect(voiceFetch).toHaveBeenCalledOnce();
   expect(requestBody(voiceFetch.mock.calls[0]?.[1])).toEqual({
@@ -274,17 +275,52 @@ test('a closed Anki returns its observed failure and keeps generated audio cache
   const voice = createSpanishVoice(loadConfig().audio, voiceFetch);
 
   expect(await backfillSentAudio(db, client, voice)).toEqual({
-    status: 'anki_closed', sent: 0, rejected: 0, pending: 1, syncedAt: null,
+    status: 'anki_closed', sent: 0, rejected: 0, awaitingAudio: 1, unspeakable: 0, failureStage: 'storeMediaFile',
     message: 'Anki is not running or cannot be reached. Open Anki and try again. AnkiConnect request failed: connect ECONNREFUSED 127.0.0.1:9876',
   });
   expect(await db.select().from(cards).get()).toEqual({ ...storedHouse, audioFile, audioMp3: Buffer.from([73]) });
   expect(ankiFetch).toHaveBeenCalledTimes(1);
   expect(await backfillSentAudio(db, client, voice)).toEqual({
-    status: 'sent', sent: 1, rejected: 0, pending: 0, syncedAt: null, message: null,
+    status: 'sent', sent: 1, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null,
   });
   expect(voiceFetch).toHaveBeenCalledOnce();
   expect(ankiFetch).toHaveBeenCalledTimes(3);
 });
+
+test.each(['storeMediaFile', 'updateNoteFields'] as const)(
+  'reports the Anki connection failure at %s after an unspeakable card and keeps cached audio for retry', async (stage) => {
+    const unsupported = { ...storedHouse, id: 5, front: 'unsupported', kind: 'conjugation' as const, back: 'yo: <b>hablo</b>' };
+    await db.insert(cards).values([unsupported, storedHouse]);
+    const voiceFetch = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(new Uint8Array([73])));
+    const ankiFetch = vi.fn<typeof fetch>();
+    if (stage === 'updateNoteFields') ankiFetch.mockResolvedValueOnce(Response.json({ result: 'stored.mp3', error: null }));
+    ankiFetch.mockRejectedValueOnce(new TypeError('connect ECONNREFUSED 127.0.0.1:9876'));
+    const client = createAnkiClient(url, ankiFetch);
+    const voice = createSpanishVoice(loadConfig().audio, voiceFetch);
+
+    expect(await backfillSentAudio(db, client, voice)).toEqual({
+      status: 'anki_closed', sent: 0, rejected: 0, awaitingAudio: 2, unspeakable: 1, failureStage: stage,
+      message: 'Anki is not running or cannot be reached. Open Anki and try again. AnkiConnect request failed: connect ECONNREFUSED 127.0.0.1:9876',
+    });
+    expect(await db.select().from(cards).orderBy(cards.id)).toEqual([
+      unsupported, { ...storedHouse, audioFile, audioMp3: Buffer.from([73]) },
+    ]);
+    expect(ankiFetch).toHaveBeenCalledTimes(stage === 'storeMediaFile' ? 1 : 2);
+
+    ankiFetch.mockResolvedValueOnce(Response.json({ result: 'retry.mp3', error: null }))
+      .mockResolvedValueOnce(Response.json({ result: null, error: null }));
+    expect(await backfillSentAudio(db, client, voice)).toEqual({
+      status: 'failed', sent: 1, rejected: 0, awaitingAudio: 1, unspeakable: 1, failureStage: 'prepare',
+      message: 'Unsupported card audio HTML tag "<b>"; check cardGenerator output (expected plain text with <br> separators only).',
+    });
+    expect(await db.select().from(cards).orderBy(cards.id)).toEqual([
+      unsupported, { ...storedHouse, audioFile, audioMp3: Buffer.from([73]), audioSentAt: 1800000000000 },
+    ]);
+    expect(await awaitingAudioCount(db)).toBe(1);
+    expect(voiceFetch).toHaveBeenCalledOnce();
+    expect(ankiFetch).toHaveBeenCalledTimes(stage === 'storeMediaFile' ? 3 : 4);
+  },
+);
 
 const ankiRefusals = [
   {
@@ -329,7 +365,7 @@ test.each(ankiRefusals.flatMap((failure) => ['storeMediaFile', 'updateNoteFields
     const voice = createSpanishVoice(loadConfig().audio, voiceFetch);
 
     expect(await backfillSentAudio(db, client, voice)).toEqual({
-      status: 'failed', sent: 2, rejected: 1, pending: 1, syncedAt: null, message,
+      status: 'failed', sent: 2, rejected: 1, awaitingAudio: 2, unspeakable: 0, failureStage: action, message,
     });
     expect(await db.select().from(cards).orderBy(cards.id)).toEqual([
       { ...first, audioSentAt: 1800000000000 }, refused, { ...third, audioSentAt: 1800000000000 }, arrived,
@@ -349,7 +385,7 @@ test.each(ankiRefusals.flatMap((failure) => ['storeMediaFile', 'updateNoteFields
     vi.mocked(Date.now).mockReturnValue(1800000001000);
 
     expect(await backfillSentAudio(db, client, voice)).toEqual({
-      status: 'sent', sent: 2, rejected: 0, pending: 0, syncedAt: null, message: null,
+      status: 'sent', sent: 2, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null,
     });
     expect(ankiFetch.mock.calls.map(([, init]) => requestBody(init))).toEqual([
       { action: 'storeMediaFile', version: 6, params: { filename: 'second.mp3', data: 'RA==' } },
@@ -367,19 +403,19 @@ test.each(ankiRefusals.flatMap((failure) => ['storeMediaFile', 'updateNoteFields
 
 test.each([
   {
-    failure: 'another refusal', status: 'failed', sent: 1, rejected: 2, pending: 0,
+    failure: 'another refusal', status: 'failed', sent: 1, rejected: 2, awaitingAudio: 2,
     response: () => Promise.resolve(Response.json({ result: null, error: 'second note refused' })),
     markers: [{ id: 10, audioSentAt: null }, { id: 20, audioSentAt: null }, { id: 30, audioSentAt: 1800000000000 }],
     calls: 6,
   },
   {
-    failure: 'a rejected fetch', status: 'failed', sent: 0, rejected: 1, pending: 2,
+    failure: 'a rejected fetch', status: 'failed', sent: 0, rejected: 1, awaitingAudio: 3,
     response: () => Promise.reject(new TypeError('connection reset')),
     markers: [{ id: 10, audioSentAt: null }, { id: 20, audioSentAt: null }, { id: 30, audioSentAt: null }],
     calls: 4,
   },
 ])('keeps the first refusal message after $failure and stops only if Anki is unreachable', async ({
-  status, sent, rejected, pending, response, markers, calls,
+  status, sent, rejected, awaitingAudio, response, markers, calls,
 }) => {
   await db.insert(cards).values([
     { ...storedHouse, audioFile: 'first.mp3', audioMp3: Buffer.from([73]) },
@@ -396,7 +432,7 @@ test.each([
     .mockResolvedValueOnce(Response.json({ result: null, error: null }));
 
   expect(await backfillSentAudio(db, createAnkiClient(url, ankiFetch), createSpanishVoice(loadConfig().audio, voiceFetch)))
-    .toEqual({ status, sent, rejected, pending, syncedAt: null, message: 'note was not found: 101' });
+    .toEqual({ status, sent, rejected, awaitingAudio, unspeakable: 0, failureStage: 'updateNoteFields', message: 'note was not found: 101' });
   expect(await db.select({ id: cards.id, audioSentAt: cards.audioSentAt }).from(cards).orderBy(cards.id)).toEqual(markers);
   expect(ankiFetch).toHaveBeenCalledTimes(calls);
   expect(voiceFetch).not.toHaveBeenCalled();
@@ -428,7 +464,7 @@ test.each(['storeMediaFile', 'updateNoteFields'])(
 
     expect(await backfillSentAudio(db, createAnkiClient(url, ankiFetch), createSpanishVoice(loadConfig().audio, voiceFetch)))
       .toEqual({
-        status: 'failed', sent: 1, rejected: 0, pending: 4, syncedAt: null,
+        status: 'failed', sent: 1, rejected: 0, awaitingAudio: 4, unspeakable: 0, failureStage: 'synthesize',
         message: 'ElevenLabs request returned HTTP 429: quota exceeded; check the response before retrying.',
       });
     expect(await db.select().from(cards).orderBy(cards.id)).toEqual([
@@ -486,7 +522,7 @@ test.each(ankiFailures.flatMap((failure) => ['storeMediaFile', 'updateNoteFields
     });
 
     expect(await backfillSentAudio(db, createAnkiClient(url, ankiFetch), createSpanishVoice(loadConfig().audio, voiceFetch)))
-      .toEqual({ status, sent: 1, rejected: 0, pending: 3, syncedAt: null, message });
+      .toEqual({ status, sent: 1, rejected: 0, awaitingAudio: 3, unspeakable: 0, failureStage: action, message });
     expect(await db.select().from(cards).where(eq(cards.id, 10)).get()).toEqual({
       ...storedHouse, audioFile: 'first.mp3', audioMp3: Buffer.from([73]), audioSentAt: 1800000000000,
     });
@@ -544,7 +580,7 @@ test.each([
   const client = createAnkiClient(url, ankiFetch);
 
   expect(await backfillSentAudio(db, client, voice))
-    .toEqual({ status: 'failed', sent: 2, rejected: 0, pending: 3, syncedAt: null, message });
+    .toEqual({ status: 'failed', sent: 2, rejected: 0, awaitingAudio: 3, unspeakable: 0, failureStage: 'synthesize', message });
   expect(await db.select().from(cards).orderBy(cards.id)).toEqual([
     { ...first, audioSentAt: 1800000000000 }, failed, unvoiced,
     {
@@ -576,7 +612,7 @@ test.each([
   vi.mocked(Date.now).mockReturnValue(1800000001000);
 
   expect(await backfillSentAudio(db, client, createSpanishVoice(loadConfig().audio, voiceFetch)))
-    .toEqual({ status: 'sent', sent: 3, rejected: 0, pending: 0, syncedAt: null, message: null });
+    .toEqual({ status: 'sent', sent: 3, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null });
   expect(await db.select({ id: cards.id, audioSentAt: cards.audioSentAt }).from(cards).orderBy(cards.id)).toEqual([
     { id: 10, audioSentAt: 1800000000000 }, { id: 20, audioSentAt: 1800000001000 },
     { id: 30, audioSentAt: 1800000001000 }, { id: 40, audioSentAt: 1800000000000 },
@@ -601,7 +637,7 @@ test('pushes a sent card again when storeCards replaces its audio and clears the
     .mockResolvedValueOnce(Response.json({ result: null, error: null }));
 
   expect(await backfillSentAudio(db, createAnkiClient(url, ankiFetch), createSpanishVoice(loadConfig().audio, voiceFetch)))
-    .toEqual({ status: 'sent', sent: 1, rejected: 0, pending: 0, syncedAt: null, message: null });
+    .toEqual({ status: 'sent', sent: 1, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null });
   expect(ankiFetch.mock.calls.map(([, init]) => requestBody(init))).toEqual([
     { action: 'storeMediaFile', version: 6, params: { filename: 'replacement.mp3', data: 'SUQz' } },
     { action: 'updateNoteFields', version: 6, params: { note: { id: 101, fields: {
@@ -629,7 +665,7 @@ test('does not backfill a card whose audio was delivered by sendPending', async 
   const voiceFetch = vi.fn<typeof fetch>();
 
   expect(await backfillSentAudio(db, client, createSpanishVoice(loadConfig().audio, voiceFetch))).toEqual({
-    status: 'nothing', sent: 0, rejected: 0, pending: 0, syncedAt: null, message: null,
+    status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null,
   });
   expect(ankiFetch).toHaveBeenCalledTimes(4);
   expect(voiceFetch).not.toHaveBeenCalled();
@@ -651,7 +687,7 @@ test('voices and pushes a sent fold whose changed Back cleared old audio after c
     .mockResolvedValueOnce(Response.json({ result: null, error: null }));
 
   expect(await backfillSentAudio(db, createAnkiClient(url, ankiFetch), createSpanishVoice(loadConfig().audio, voiceFetch)))
-    .toEqual({ status: 'sent', sent: 1, rejected: 0, pending: 0, syncedAt: null, message: null });
+    .toEqual({ status: 'sent', sent: 1, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null });
   expect(requestBody(voiceFetch.mock.calls[0]?.[1])).toEqual({ text: 'la casa el hogar', model_id: 'eleven_multilingual_v2' });
   expect(ankiFetch.mock.calls.map(([, init]) => requestBody(init))).toEqual([
     { action: 'storeMediaFile', version: 6, params: { filename: audioFile, data: 'SUQ=' } },
@@ -676,7 +712,7 @@ test('pushes conflict-filled audio on a sent row without another speech request'
     .mockResolvedValueOnce(Response.json({ result: null, error: null }));
 
   expect(await backfillSentAudio(db, createAnkiClient(url, ankiFetch), createSpanishVoice(loadConfig().audio, voiceFetch)))
-    .toEqual({ status: 'sent', sent: 1, rejected: 0, pending: 0, syncedAt: null, message: null });
+    .toEqual({ status: 'sent', sent: 1, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null });
   expect(ankiFetch.mock.calls.map(([, init]) => requestBody(init))).toEqual([
     { action: 'storeMediaFile', version: 6, params: { filename: 'filled.mp3', data: 'SUQ=' } },
     { action: 'updateNoteFields', version: 6, params: { note: { id: 101, fields: { Back: 'la casa [sound:filled-stored.mp3]' } } } },
@@ -685,4 +721,97 @@ test('pushes conflict-filled audio on a sent row without another speech request'
     ...storedHouse, audioFile: 'filled.mp3', audioMp3: Buffer.from([73, 68]), audioSentAt: 1800000000000,
   });
   expect(voiceFetch).not.toHaveBeenCalled();
+});
+
+
+test('awaitingAudioCount includes refusals and cached bytes but requires both send markers', async () => {
+  await db.insert(cards).values([
+    storedHouse,
+    { ...storedHouse, id: 20, front: 'cached', audioFile: 'cached.mp3', audioMp3: Buffer.from([73]), declinedAt: 999 },
+    { ...storedHouse, id: 30, front: 'unsent', sentAt: null },
+    { ...storedHouse, id: 40, front: 'no note', ankiNoteId: null },
+    { ...storedHouse, id: 50, front: 'delivered', audioSentAt: 0 },
+    { ...storedHouse, id: 60, front: 'zero markers', sentAt: 0, ankiNoteId: 0 },
+  ]);
+  expect(await awaitingAudioCount(db)).toBe(3);
+});
+
+test('counts unspeakable cards after a voice failure while keeping its first observed failure', async () => {
+  await db.insert(cards).values([
+    storedHouse,
+    { ...storedHouse, id: 20, front: 'unsupported basic', back: '<b>casa</b>' },
+    { ...storedHouse, id: 30, kind: 'example', front: 'unsupported example', back: 'casa &amp; hogar' },
+  ]);
+  const voiceFetch = vi.fn<typeof fetch>().mockRejectedValueOnce(new Error('speech connection reset'));
+  const ankiFetch = vi.fn<typeof fetch>();
+
+  expect(await backfillSentAudio(db, createAnkiClient(url, ankiFetch), createSpanishVoice(loadConfig().audio, voiceFetch)))
+    .toEqual({ status: 'failed', sent: 0, rejected: 0, awaitingAudio: 3, unspeakable: 2,
+      failureStage: 'synthesize', message: 'speech connection reset' });
+  expect(await awaitingAudioCount(db)).toBe(3);
+  expect(voiceFetch).toHaveBeenCalledOnce();
+  expect(ankiFetch).not.toHaveBeenCalled();
+});
+
+test('reports a voice service failure after an unspeakable card while pushing cached audio and recounting the store', async () => {
+  const unsupported = { ...storedHouse, kind: 'conjugation' as const, back: 'yo: <b>hablo</b>' };
+  const unvoiced = { ...storedHouse, id: 20, front: 'unvoiced', ankiNoteId: 202 };
+  const cached = { ...storedHouse, id: 30, front: 'cached', ankiNoteId: 303,
+    audioFile: 'cached.mp3', audioMp3: Buffer.from([73]) };
+  const arrived = { ...storedHouse, id: 40, front: 'arrived during failure', ankiNoteId: 404 };
+  await db.insert(cards).values([unsupported, unvoiced, cached]);
+  const voiceFetch = vi.fn<typeof fetch>().mockImplementationOnce(async () => {
+    await db.insert(cards).values(arrived);
+    return new Response('quota exceeded', { status: 429 });
+  });
+  const ankiFetch = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(Response.json({ result: 'cached.mp3', error: null }))
+    .mockResolvedValueOnce(Response.json({ result: null, error: null }));
+
+  expect(await backfillSentAudio(db, createAnkiClient(url, ankiFetch), createSpanishVoice(loadConfig().audio, voiceFetch)))
+    .toEqual({ status: 'failed', sent: 1, rejected: 0, awaitingAudio: 3, unspeakable: 1,
+      failureStage: 'synthesize',
+      message: 'ElevenLabs request returned HTTP 429: quota exceeded; check the response before retrying.' });
+  expect(await db.select().from(cards).orderBy(cards.id)).toEqual([
+    unsupported, unvoiced, { ...cached, audioSentAt: 1800000000000 }, arrived,
+  ]);
+  expect(await awaitingAudioCount(db)).toBe(3);
+  expect(voiceFetch).toHaveBeenCalledOnce();
+  expect(ankiFetch.mock.calls.map(([, init]) => requestBody(init))).toEqual([
+    { action: 'storeMediaFile', version: 6, params: { filename: 'cached.mp3', data: 'SQ==' } },
+    { action: 'updateNoteFields', version: 6, params: { note: { id: 303, fields: { Back: 'la casa [sound:cached.mp3]' } } } },
+  ]);
+});
+
+test.each(['cache', 'markAudioSent'] as const)('reports a %s write failure and retains earlier committed progress', async (stage) => {
+  await db.insert(cards).values([
+    { ...storedHouse, audioFile: 'first.mp3', audioMp3: Buffer.from([73]) },
+    { ...storedHouse, id: 20, front: 'second', ankiNoteId: 202 },
+  ]);
+  const failUpdate = () => vi.spyOn(db, 'update').mockImplementationOnce(() => {
+    throw new Error('audio write failed');
+  });
+  const voiceFetch = vi.fn<typeof fetch>().mockImplementationOnce(async () => {
+    if (stage === 'cache') failUpdate();
+    return new Response(new Uint8Array([68]));
+  });
+  const ankiFetch = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(Response.json({ result: 'first.mp3', error: null }))
+    .mockResolvedValueOnce(Response.json({ result: null, error: null }))
+    .mockResolvedValueOnce(Response.json({ result: 'second.mp3', error: null }))
+    .mockImplementationOnce(async () => {
+      failUpdate();
+      return Response.json({ result: null, error: null });
+    });
+
+  expect(await backfillSentAudio(db, createAnkiClient(url, ankiFetch), createSpanishVoice(loadConfig().audio, voiceFetch)))
+    .toEqual({ status: 'failed', sent: 1, rejected: 0, awaitingAudio: 1, unspeakable: 0,
+      failureStage: stage, message: 'audio write failed' });
+  expect(await db.select({ id: cards.id, sentAt: cards.sentAt, audioSentAt: cards.audioSentAt })
+    .from(cards).orderBy(cards.id)).toEqual([
+    { id: 10, sentAt: 456, audioSentAt: 1800000000000 }, { id: 20, sentAt: 456, audioSentAt: null },
+  ]);
+  expect(await awaitingAudioCount(db)).toBe(1);
+  expect(ankiFetch).toHaveBeenCalledTimes(stage === 'cache' ? 2 : 4);
+  expect(voiceFetch).toHaveBeenCalledOnce();
 });

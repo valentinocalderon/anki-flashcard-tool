@@ -44,3 +44,7 @@ Generation and backfill share one 30000-character audio cap per run. Audio alrea
 - **Retry N declined cards** retries cards Anki declined, together with any pending cards. Declined cards stay out of automatic sends; if Anki declines them again, they remain visible for another explicit retry.
 
 Both buttons show the current count and are disabled while generation or sending is in progress.
+
+**Voice N cards waiting for audio** runs audio backfill alone, using a fresh voice budget and reusing cached audio. The footer shows the current number of sent cards whose audio has not yet been delivered, including cards Anki refused to update and cards whose text could not be spoken. The control is beside Send and Retry, and all controls are disabled while any run is pending.
+
+Every run refreshes the counts, including after a partial failure. The page reports the audio cap from generation, send, retry, or the audio-only control. It names how many cards could not be spoken during generation and during backfill separately; a card encountered in both stages can appear in both counts. The observed failure message is shown; when backfill encounters both unspeakable cards and an operational failure, it shows the operational failure message and the unspeakable-card count.

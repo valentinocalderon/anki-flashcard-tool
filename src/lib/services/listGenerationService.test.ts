@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { Script } from 'node:vm';
-import { createClient, type Client } from '@libsql/client';
+import { createClient, type Client, type InStatement } from '@libsql/client';
 import { eq } from 'drizzle-orm';
 import * as React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -146,10 +146,12 @@ function pageWithResults(results: WordResult[], capReached = false) {
   const api = { anki: {
     pendingCount: { useQuery: () => ({ data: 0 }) },
     declinedCount: { useQuery: () => ({ data: 0 }) },
+    awaitingAudioCount: { useQuery: () => ({ data: 0 }) },
+    backfillAudio: { useMutation: () => ({ isPending: false, reset: vi.fn() }) },
     sendPending: { useMutation: () => ({ isPending: false, reset: vi.fn() }) },
     retryDeclined: { useMutation: () => ({ isPending: false, reset: vi.fn() }) },
     generateFromList: {
-      useMutation: () => ({ isPending: false, isSuccess: true, data: { capReached } }),
+      useMutation: () => ({ isPending: false, isSuccess: true, data: { capReached, audio: { unspeakable: 0, message: null } } }),
     },
   } };
   pageScript.runInNewContext({
@@ -1312,7 +1314,7 @@ test('voice wiring voices every stored kind under the cap with the injected fetc
     { kind: 'conjugation', audioFile: 'card-c601592f902a214434a7a704ad2f32fbbe719057a47ea3c26506cc66eb97ccf1.mp3', audioMp3: Buffer.from([73, 68, 51, 0, 255]) },
     { kind: 'conjugation', audioFile: 'card-51dcfe18e8147d6a083aad1ba0fb3f05d9bc1a49db7f8a17ec948de22660f344.mp3', audioMp3: Buffer.from([73, 68, 51, 0, 255]) },
   ]);
-  expect(report).toEqual({ capReached: false, results: [
+  expect(report).toEqual({ audio: { unspeakable: 0, message: null }, capReached: false, results: [
     { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 },
     { word: 'hablar', status: 'added', vocabCards: 1, conjugationCards: 2 },
   ] });
@@ -1341,13 +1343,13 @@ test('voice wiring shares the 30000 character cap across items and resets it for
     { front: 'goodbye', voiced: false, named: false },
     { front: 'yes', voiced: false, named: false },
   ]);
-  expect(report).toEqual({ capReached: true, results: [
+  expect(report).toEqual({ audio: { unspeakable: 0, message: null }, capReached: true, results: [
     { word: 'casa', status: 'added', vocabCards: 1, conjugationCards: 0 },
     { word: 'hogar', status: 'added', vocabCards: 1, conjugationCards: 0 },
     { word: 'adiós', status: 'added', vocabCards: 1, conjugationCards: 0 },
     { word: 'sí', status: 'added', vocabCards: 1, conjugationCards: 0 },
   ] });
-  expect(await generateForWords(db, 'árbol', lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).toEqual({ capReached: false, results: [
+  expect(await generateForWords(db, 'árbol', lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).toEqual({ audio: { unspeakable: 0, message: null }, capReached: false, results: [
     { word: 'árbol', status: 'added', vocabCards: 1, conjugationCards: 0 },
   ] });
   expect(fetchImpl).toHaveBeenCalledTimes(3);
@@ -1367,7 +1369,7 @@ test.each(['collision', 'fold', 'skipped'])('voice wiring reuses cached audio wh
     path === 'fold' ? singleDeckUrl : path === 'collision' ? '¡Chao!' : '¡ADIÓS!', lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
 
   expect(fetchImpl.mock.calls.filter(([, init]) => init?.method === 'POST')).toEqual([]);
-  expect(report).toEqual({ capReached: false, results: [
+  expect(report).toEqual({ audio: { unspeakable: 0, message: null }, capReached: false, results: [
     { word: path === 'fold' ? '¡Adiós! / ¡Chao!' : path === 'collision' ? '¡Chao!' : '¡ADIÓS!',
       status: path === 'fold' ? 'updated' : path === 'collision' ? 'exists' : 'skipped', vocabCards: 0, conjugationCards: 0 },
   ] });
@@ -1403,7 +1405,7 @@ test.each([
     audioFile: 'card-c7a314202176837303762eca31fe8d778b52284e425256b3b46283325ec48935.mp3',
     audioMp3: Buffer.from([73, 68, 51, 0, 255]), audioSentAt: null, ankiNoteId, sentAt, declinedAt: null, createdAt: 123,
   }]);
-  expect(report).toEqual({ capReached: false, results: [
+  expect(report).toEqual({ audio: { unspeakable: 0, message: null }, capReached: false, results: [
     { word: '¡Adiós! / ¡Chao!', status: 'updated', vocabCards: 0, conjugationCards: 0 },
   ] });
 });
@@ -1439,7 +1441,7 @@ test.each([
 
   const report = await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
 
-  expect(report).toEqual({ capReached: false, results: [
+  expect(report).toEqual({ audio: { unspeakable: 0, message: null }, capReached: false, results: [
     { word: 'sí', status: 'added', vocabCards: 1, conjugationCards: 0 },
     { word: '¡Adiós! / ¡Chao!', status: 'error', vocabCards: 0, conjugationCards: 0, message },
     { word: 'casa', status: 'added', vocabCards: 1, conjugationCards: 0 },
@@ -1480,7 +1482,7 @@ test('voice wiring uses the stored Back and identity when an uncached front coll
     audioFile: 'card-39ea127757ece19e4f940e03a400b6cc3fae452580ca79223e0d6b75148a5477.mp3',
     audioMp3: Buffer.from([73, 68, 51]),
   }]);
-  expect(report).toEqual({ capReached: false, results: [
+  expect(report).toEqual({ audio: { unspeakable: 0, message: null }, capReached: false, results: [
     { word: 'casa', status: 'exists', vocabCards: 0, conjugationCards: 0 },
   ] });
 });
@@ -1504,7 +1506,7 @@ test('voice wiring voices the retained alternatives and original identity of an 
       audioFile: 'card-c7a314202176837303762eca31fe8d778b52284e425256b3b46283325ec48935.mp3',
       audioMp3: Buffer.from([73, 68, 51]),
     }]);
-  expect(report).toEqual({ capReached: false, results: [
+  expect(report).toEqual({ audio: { unspeakable: 0, message: null }, capReached: false, results: [
     { word: '¡Chao! / Hasta luego', status: 'updated', vocabCards: 0, conjugationCards: 0 },
   ] });
 });
@@ -1526,7 +1528,9 @@ test('voice wiring keeps a CardAudioError card stored and reported and voices fo
     { back: 'yo: <b>hablo</b>', audioMp3: null },
     { back: 'yo: hablé', audioMp3: Buffer.from([73, 68, 51]) },
   ]);
-  expect(report).toEqual({ capReached: false, results: [
+  expect(report).toEqual({ audio: { unspeakable: 1,
+    message: 'Unsupported card audio HTML tag "<b>"; check cardGenerator output (expected plain text with <br> separators only).',
+  }, capReached: false, results: [
     { word: 'hablar', status: 'added', vocabCards: 1, conjugationCards: 2 },
   ] });
   expect(await db.select({ cardId: conjugationPatterns.cardId }).from(conjugationPatterns).orderBy(conjugationPatterns.id))
@@ -1560,7 +1564,7 @@ test.each([
 
   const report = await generateForWords(db, 'casa\nhablar\nadiós', lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
 
-  expect(report).toEqual({ capReached: false, results: [
+  expect(report).toEqual({ audio: { unspeakable: 0, message: null }, capReached: false, results: [
     { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 },
     { word: 'hablar', status: 'error', vocabCards: 0, conjugationCards: 0, message },
     { word: 'adiós', status: 'added', vocabCards: 1, conjugationCards: 0 },
@@ -1591,7 +1595,7 @@ test.each([false, true])('voice wiring passes capReached %s through a successful
   vi.doMock('@/lib/services/listGenerationService', () => ({
     generateForWords: vi.fn<typeof generateForWords>().mockImplementation(async (...args) => {
       if (capReached) await args[4].synthesize('a'.repeat(30001));
-      return { capReached, results: [
+      return { audio: { unspeakable: 0, message: null }, capReached, results: [
         { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 },
       ] };
     }),
@@ -1603,14 +1607,100 @@ test.each([false, true])('voice wiring passes capReached %s through a successful
     const { ankiRouter } = await import('@/server/api/routers/lookupRouter');
     const caller = ankiRouter.createCaller({ headers: new Headers() });
 
-    expect(await caller.generateFromList({ text: 'casa' })).toEqual({ capReached, results: [
+    expect(await caller.generateFromList({ text: 'casa' })).toEqual({ audio: { unspeakable: 0, message: null }, capReached, results: [
       { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 },
     ], send: { status: 'sent', sent: 2, rejected: 0, pending: 0, syncedAt: 123 },
-    backfill: { status: 'nothing', sent: 0, rejected: 0, pending: 0, syncedAt: null, message: null } });
+    backfill: { status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null } });
   } finally {
     vi.doUnmock('@/server/db');
     vi.doUnmock('@/lib/services/listGenerationService');
     vi.doUnmock('@/lib/services/ankiSender');
     vi.resetModules();
   }
+});
+
+test('unspeakable generation reports the earlier card id when two cards fail with different messages', async () => {
+  await client.execute('PRAGMA reverse_unordered_selects = ON');
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>().mockResolvedValue({
+    ...regularVerb, conjugations: { present: { yo: '<b>hablo</b>' }, preterite: { yo: 'hablé &amp; hablé' } },
+  });
+
+  const report = await generateForWords(db, 'hablar', lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  expect(report).toEqual({ audio: { unspeakable: 2,
+    message: 'Unsupported card audio HTML tag "<b>"; check cardGenerator output (expected plain text with <br> separators only).',
+  }, capReached: false, results: [
+    { word: 'hablar', status: 'added', vocabCards: 1, conjugationCards: 2 },
+  ] });
+  expect(await db.select({ id: cards.id, back: cards.back, audioMp3: cards.audioMp3 }).from(cards).orderBy(cards.id)).toEqual([
+    { id: 1, back: 'hablar', audioMp3: Buffer.from([73, 68, 51]) },
+    { id: 2, back: 'yo: <b>hablo</b>', audioMp3: null },
+    { id: 3, back: 'yo: hablé &amp; hablé', audioMp3: null },
+  ]);
+  expect(fetchImpl).toHaveBeenCalledOnce();
+});
+
+test('generation scans silent cards only when a card failed to speak', async () => {
+  await db.insert(words).values({ id: 1, query: '¡adiós!', info: JSON.stringify(goodbye), lookedUpAt: 123 });
+  await db.insert(cards).values(storedGoodbye);
+  const execute = vi.spyOn(client, 'execute');
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>().mockResolvedValue(noun);
+
+  const report = await generateForWords(db, 'casa', lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  expect(report).toEqual({ audio: { unspeakable: 0, message: null }, capReached: false, results: [
+    { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 },
+  ] });
+  const silentReads = () => execute.mock.calls.map(([statement]: [InStatement, ...unknown[]]) => typeof statement === 'string' ? statement : statement.sql)
+    .filter((sql) => sql.includes('"audio_mp3" is null'));
+  expect(silentReads()).toEqual([]);
+  expect(fetchImpl).toHaveBeenCalledTimes(2);
+
+  lookup.mockResolvedValueOnce({ ...goodbye, english: 'yes', spanish: '<b>sí</b>' });
+
+  const failedReport = await generateForWords(db, 'sí', lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  expect(silentReads()).toHaveLength(1);
+  expect(failedReport).toEqual({ audio: { unspeakable: 1,
+    message: 'Unsupported card audio HTML tag "<b>"; check cardGenerator output (expected plain text with <br> separators only).',
+  }, capReached: false, results: [
+    { word: 'sí', status: 'added', vocabCards: 1, conjugationCards: 0 },
+  ] });
+  expect(fetchImpl).toHaveBeenCalledTimes(2);
+});
+
+test('unspeakable generation counts only stored silent cards after a later voice failure', async () => {
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>()
+    .mockResolvedValueOnce({ ...regularVerb, conjugations: { present: { yo: '<b>hablo</b>' }, preterite: { yo: 'hablé' } } })
+    .mockResolvedValueOnce(noun);
+  fetchImpl.mockResolvedValueOnce(new Response(new Uint8Array([73])))
+    .mockRejectedValueOnce(new Error('speech connection reset'));
+
+  const report = await generateForWords(db, 'hablar\ncasa', lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  expect(report).toEqual({ audio: { unspeakable: 0, message: null }, capReached: false, results: [
+    { word: 'hablar', status: 'error', vocabCards: 0, conjugationCards: 0, message: 'speech connection reset' },
+    { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 },
+  ] });
+  expect(await db.select({ front: cards.front }).from(cards).orderBy(cards.id)).toEqual([
+    { front: 'house' }, { front: 'La ____ es grande.' },
+  ]);
+});
+
+test('unspeakable generation counts one stored card when separate inputs collide on its front', async () => {
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>()
+    .mockResolvedValueOnce({ ...goodbye, english: 'yes', spanish: '<b>sí</b>' })
+    .mockResolvedValueOnce({ ...goodbye, english: 'yes', spanish: '<b>claro</b>' });
+
+  expect(await generateForWords(db, 'sí\nclaro', lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl)))
+    .toEqual({ capReached: false, audio: { unspeakable: 1,
+      message: 'Unsupported card audio HTML tag "<b>"; check cardGenerator output (expected plain text with <br> separators only).' },
+    results: [
+      { word: 'sí', status: 'added', vocabCards: 1, conjugationCards: 0 },
+      { word: 'claro', status: 'exists', vocabCards: 0, conjugationCards: 0 },
+    ] });
+  expect(await db.select({ front: cards.front, back: cards.back, audioMp3: cards.audioMp3 }).from(cards)).toEqual([
+    { front: 'yes', back: '<b>sí</b>', audioMp3: null },
+  ]);
+  expect(fetchImpl).not.toHaveBeenCalled();
 });
