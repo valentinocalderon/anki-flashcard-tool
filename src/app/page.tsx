@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { formatResultLine } from '@/lib/resultLine';
 import type { SendReport } from '@/lib/services/ankiSender';
 import type { AudioBackfillReport } from '@/lib/services/audioBackfill';
+import type { GenerationAudioReport } from '@/lib/services/listGenerationService';
 import type { WordResult } from '@/lib/types';
 import { api } from '@/trpc/react';
 
@@ -11,6 +12,8 @@ function useAnkiRun() {
   const [sendReport, setSendReport] = useState<SendReport | null>(null);
   const [results, setResults] = useState<WordResult[]>([]);
   const [backfillReport, setBackfillReport] = useState<AudioBackfillReport | null>(null);
+  const [generationReport, setGenerationReport] = useState<{ audio: GenerationAudioReport; capReached: boolean } | null>(null);
+  const [linkProgress, setLinkProgress] = useState<{ total: number; finished: number } | null>(null);
   const pendingCount = api.anki.pendingCount.useQuery();
   const declinedCount = api.anki.declinedCount.useQuery();
   const awaitingAudioCount = api.anki.awaitingAudioCount.useQuery();
@@ -28,6 +31,7 @@ function useAnkiRun() {
     ...sendOptions,
     onMutate: () => {
       generation.reset();
+      setGenerationReport(null);
       retrying.reset();
       voicing.reset();
       setSendReport(null);
@@ -38,6 +42,7 @@ function useAnkiRun() {
     ...sendOptions,
     onMutate: () => {
       generation.reset();
+      setGenerationReport(null);
       sending.reset();
       voicing.reset();
       setSendReport(null);
@@ -47,6 +52,7 @@ function useAnkiRun() {
   const voicing = api.anki.backfillAudio.useMutation({
     onMutate: () => {
       generation.reset();
+      setGenerationReport(null);
       sending.reset();
       retrying.reset();
       setSendReport(null);
@@ -63,25 +69,35 @@ function useAnkiRun() {
       setSendReport(null);
       setBackfillReport(null);
       setResults([]);
+      setGenerationReport(null);
+      setLinkProgress(null);
     },
-    onSuccess: ({ results, send, backfill }) => {
-      setResults(results);
-      setSendReport(send);
-      setBackfillReport(backfill);
+    onSuccess: async (events) => {
+      for await (const event of events) {
+        if ('links' in event) setLinkProgress({ total: event.links.length, finished: 0 });
+        else if ('link' in event) setLinkProgress((progress) => progress && { ...progress, finished: progress.finished + 1 });
+        else if ('result' in event) setResults((previous) => [...previous, event.result]);
+        else if ('send' in event) {
+          setResults(event.results);
+          setGenerationReport(event);
+          setSendReport(event.send);
+          setBackfillReport(event.backfill);
+        }
+      }
     },
     onSettled: refreshCounts,
   });
   return {
-    sendReport, backfillReport, results, pendingCount, declinedCount, awaitingAudioCount, generation, sending, retrying, voicing,
+    sendReport, backfillReport, generationReport, linkProgress, results, pendingCount, declinedCount, awaitingAudioCount, generation, sending, retrying, voicing,
     isPending: generation.isPending || sending.isPending || retrying.isPending || voicing.isPending,
-    capReached: [generation.data, sending.data, retrying.data, voicing.data].some((report) => report?.capReached === true),
+    capReached: [generationReport, sending.data, retrying.data, voicing.data].some((report) => report?.capReached === true),
   };
 }
 
 export default function HomePage() {
   const [text, setText] = useState('');
   const {
-    sendReport, backfillReport, results, pendingCount, declinedCount, awaitingAudioCount, generation, sending, retrying, voicing, isPending, capReached,
+    sendReport, backfillReport, generationReport, linkProgress, results, pendingCount, declinedCount, awaitingAudioCount, generation, sending, retrying, voicing, isPending, capReached,
   } = useAnkiRun();
 
   return (
@@ -113,6 +129,13 @@ export default function HomePage() {
         </button>
       </form>
 
+      {generation.isPending && (
+        <div role="status" className="text-sm mb-3 flex items-center gap-2">
+          <span aria-hidden="true" className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
+          <span>Generating…</span>
+          {linkProgress && <span>Deck links finished: {linkProgress.finished} of {linkProgress.total}</span>}
+        </div>
+      )}
       {generation.error && (
         <p role="alert" className="text-red-600">{generation.error.message}</p>
       )}
@@ -140,10 +163,10 @@ export default function HomePage() {
       {capReached && (
         <p aria-live="polite" className="text-sm mb-3">Audio cap reached for this run.</p>
       )}
-      {generation.data && generation.data.audio.unspeakable > 0 && (
+      {generationReport && generationReport.audio.unspeakable > 0 && (
         <>
-          <p>During generation, {generation.data.audio.unspeakable} {pluralise(generation.data.audio.unspeakable, 'card', 'cards')} could not be spoken.</p>
-          <p role="alert" className="text-red-600">{generation.data.audio.message}</p>
+          <p>During generation, {generationReport.audio.unspeakable} {pluralise(generationReport.audio.unspeakable, 'card', 'cards')} could not be spoken.</p>
+          <p role="alert" className="text-red-600">{generationReport.audio.message}</p>
         </>
       )}
       <ul aria-live="polite" className="text-sm space-y-2">

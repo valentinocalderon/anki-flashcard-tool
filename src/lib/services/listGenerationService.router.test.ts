@@ -7,6 +7,7 @@ import * as database from '@/server/db';
 import { cards, words } from '@/server/db/schema';
 import { openaiLookup } from './aiLookup';
 import * as ankiSender from './ankiSender';
+import * as audioBackfill from './audioBackfill';
 import { storeCards } from './cardStore';
 import * as listGeneration from './listGenerationService';
 import * as spanishVoice from './spanishVoice';
@@ -49,9 +50,76 @@ afterEach(() => {
   client.close();
 });
 
+async function generationReport(request: ReturnType<ReturnType<typeof ankiRouter.createCaller>['generateFromList']>) {
+  const events = [];
+  for await (const event of await request) events.push(event);
+  return events.at(-1);
+}
+
+test('the router streams every service event in order and yields the send and backfill report last', async () => {
+  const result = { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 } as const;
+  const summary = { results: [result], capReached: false, audio: { unspeakable: 0, message: null } };
+  const order: string[] = [];
+  vi.spyOn(listGeneration, 'generateForWordsEvents').mockImplementation(async function* () {
+    yield { links: ['deck-1', 'deck-2'] };
+    yield { link: 'deck-1' };
+    yield { link: 'deck-2' };
+    yield { result };
+    yield summary;
+    order.push('generation');
+    return summary;
+  });
+  const send = vi.spyOn(ankiSender, 'sendPending').mockImplementationOnce(async () => {
+    order.push('send');
+    return { status: 'sent', sent: 2, rejected: 0, pending: 0, syncedAt: 123, message: null };
+  });
+  const backfill = vi.spyOn(audioBackfill, 'backfillSentAudio').mockImplementationOnce(async () => {
+    order.push('backfill');
+    return { status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null };
+  });
+  const caller = ankiRouter.createCaller({ headers: new Headers() });
+  const events = await caller.generateFromList({ text: 'casa' });
+
+  expect(await events.next()).toEqual({ done: false, value: { links: ['deck-1', 'deck-2'] } });
+  expect(await events.next()).toEqual({ done: false, value: { link: 'deck-1' } });
+  expect(await events.next()).toEqual({ done: false, value: { link: 'deck-2' } });
+  expect(await events.next()).toEqual({ done: false,
+    value: { result: { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 } } });
+  expect(await events.next()).toEqual({ done: false, value: {
+    results: [{ word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 }],
+    capReached: false, audio: { unspeakable: 0, message: null },
+  } });
+  expect(send).not.toHaveBeenCalled();
+  expect(backfill).not.toHaveBeenCalled();
+  expect(await events.next()).toEqual({ done: false, value: {
+    results: [{ word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 }],
+    capReached: false, audio: { unspeakable: 0, message: null },
+    send: { status: 'sent', sent: 2, rejected: 0, pending: 0, syncedAt: 123, message: null },
+    backfill: { status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null },
+  } });
+  expect(await events.next()).toEqual({ done: true, value: undefined });
+  expect(order).toEqual(['generation', 'send', 'backfill']);
+  expect(fetchImpl).not.toHaveBeenCalled();
+});
+
+test('the router streams a pack request failure without sending or backfilling', async () => {
+  fetchImpl.mockResolvedValueOnce(new Response('unavailable', { status: 503, statusText: 'Service Unavailable' }));
+  const send = vi.spyOn(ankiSender, 'sendPending');
+  const backfill = vi.spyOn(audioBackfill, 'backfillSentAudio');
+  const caller = ankiRouter.createCaller({ headers: new Headers() });
+  const events = await caller.generateFromList({ text: 'https://www.brainscape.com/packs/21648778' });
+
+  await expect(events.next()).rejects.toThrow(
+    'Brainscape request for https://www.brainscape.com/packs/21648778 returned HTTP 503 Service Unavailable; check the response and retry.',
+  );
+  expect(send).not.toHaveBeenCalled();
+  expect(backfill).not.toHaveBeenCalled();
+  expect(fetchImpl).toHaveBeenCalledOnce();
+});
+
 test('the router builds one voice per request and shares its budget across all generated items', async () => {
   const createVoice = vi.spyOn(spanishVoice, 'createSpanishVoice');
-  const generate = vi.spyOn(listGeneration, 'generateForWords');
+  const generate = vi.spyOn(listGeneration, 'generateForWordsEvents');
   vi.spyOn(ankiSender, 'sendPending')
     .mockResolvedValueOnce({ status: 'sent', sent: 3, rejected: 0, pending: 0, syncedAt: 123, message: null })
     .mockResolvedValueOnce({ status: 'sent', sent: 1, rejected: 0, pending: 0, syncedAt: 456, message: null });
@@ -62,7 +130,7 @@ test('the router builds one voice per request and shares its budget across all g
     .mockResolvedValueOnce({ ...wordInfo, spanish: 'árbol', english: 'tree' });
   const caller = ankiRouter.createCaller({ headers: new Headers() });
 
-  const report = await caller.generateFromList({ text: 'casa\nhogar\nsí' });
+  const report = await generationReport(caller.generateFromList({ text: 'casa\nhogar\nsí' }));
 
   expect(createVoice).toHaveBeenCalledExactlyOnceWith({ capCharacters: 30000 }, fetchImpl);
   const created = createVoice.mock.results[0];
@@ -87,7 +155,7 @@ test('the router builds one voice per request and shares its budget across all g
   ], send: { status: 'sent', sent: 3, rejected: 0, pending: 0, syncedAt: 123, message: null },
   backfill: { status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null } });
 
-  expect(await caller.generateFromList({ text: 'árbol' })).toEqual({ audio: { unspeakable: 0, message: null }, capReached: false, results: [
+  expect(await generationReport(caller.generateFromList({ text: 'árbol' }))).toEqual({ audio: { unspeakable: 0, message: null }, capReached: false, results: [
     { word: 'árbol', status: 'added', vocabCards: 1, conjugationCards: 0 },
   ], send: { status: 'sent', sent: 1, rejected: 0, pending: 0, syncedAt: 456, message: null },
   backfill: { status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null } });
@@ -145,7 +213,7 @@ test.each(['sendPending', 'retryDeclined'] as const)(
       .mockResolvedValueOnce(ankiResponse(null));
     const caller = ankiRouter.createCaller({ headers: new Headers() });
 
-    expect(await caller.generateFromList({ text: 'sí' })).toEqual({
+    expect(await generationReport(caller.generateFromList({ text: 'sí' }))).toEqual({
       results: [{ word: 'sí', status: 'added', vocabCards: 1, conjugationCards: 0 }], capReached: true, audio: { unspeakable: 0, message: null },
       send: { status: 'sent', sent: 1, rejected: 0, pending: 0, syncedAt: 1800000000000, message: null },
       backfill: { status: 'sent', sent: 1, rejected: 0, awaitingAudio: 1, unspeakable: 0, failureStage: null, message: null },
@@ -243,7 +311,7 @@ test.each(['generateFromList', 'sendPending', 'retryDeclined'] as const)(
       .mockResolvedValueOnce(ankiResponse('house.mp3'))
       .mockResolvedValueOnce(ankiResponse(null));
     const caller = ankiRouter.createCaller({ headers: new Headers() });
-    const run = () => mutation === 'generateFromList' ? caller.generateFromList({ text: 'casa' }) : caller[mutation]();
+    const run = () => mutation === 'generateFromList' ? generationReport(caller.generateFromList({ text: 'casa' })) : caller[mutation]();
     const generation = mutation === 'generateFromList' ? {
       results: [{ word: 'casa', status: 'skipped', vocabCards: 0, conjugationCards: 0 }], capReached: false, audio: { unspeakable: 0, message: null },
     } : {};
@@ -336,7 +404,7 @@ test.each(backfillFailures.flatMap((failure) => (['generateFromList', 'sendPendi
     });
     const caller = ankiRouter.createCaller({ headers: new Headers() });
 
-    expect(await (mutation === 'generateFromList' ? caller.generateFromList({ text: 'casa' }) : caller[mutation]()))
+    expect(await (mutation === 'generateFromList' ? generationReport(caller.generateFromList({ text: 'casa' })) : caller[mutation]()))
       .toEqual({
         capReached: false, ...(mutation === 'generateFromList' ? {
           results: [{ word: 'casa', status: 'skipped', vocabCards: 0, conjugationCards: 0 }], capReached: false, audio: { unspeakable: 0, message: null },
@@ -370,12 +438,12 @@ test('the first post-migration pass counts cached audio already in Anki and does
     .mockResolvedValueOnce(ankiResponse(null));
   const caller = ankiRouter.createCaller({ headers: new Headers() });
 
-  expect(await caller.generateFromList({ text: 'casa' })).toEqual({
+  expect(await generationReport(caller.generateFromList({ text: 'casa' }))).toEqual({
     results: [{ word: 'casa', status: 'skipped', vocabCards: 0, conjugationCards: 0 }], capReached: false, audio: { unspeakable: 0, message: null },
     send: { status: 'nothing', sent: 0, rejected: 0, pending: 0, syncedAt: null, message: null },
     backfill: { status: 'sent', sent: 2, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null },
   });
-  expect(await caller.generateFromList({ text: 'casa' })).toEqual({
+  expect(await generationReport(caller.generateFromList({ text: 'casa' }))).toEqual({
     results: [{ word: 'casa', status: 'skipped', vocabCards: 0, conjugationCards: 0 }], capReached: false, audio: { unspeakable: 0, message: null },
     send: { status: 'nothing', sent: 0, rejected: 0, pending: 0, syncedAt: null, message: null },
     backfill: { status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null },
@@ -460,7 +528,7 @@ test.each(['generateFromList', 'sendPending', 'retryDeclined', 'backfillAudio'] 
     const caller = ankiRouter.createCaller({ headers: new Headers() });
     expect(await caller.awaitingAudioCount()).toBe(1);
 
-    const report = await (mutation === 'generateFromList' ? caller.generateFromList({ text: 'casa' }) : caller[mutation]());
+    const report = await (mutation === 'generateFromList' ? generationReport(caller.generateFromList({ text: 'casa' })) : caller[mutation]());
 
     expect(report).toEqual({ capReached: true,
       ...(mutation === 'generateFromList' ? { results: [
@@ -543,7 +611,7 @@ test('generation carries both unspeakable reports while saving and sending the s
     .mockResolvedValueOnce(ankiResponse(null));
   const caller = ankiRouter.createCaller({ headers: new Headers() });
 
-  expect(await caller.generateFromList({ text: 'sí' })).toEqual({ capReached: false,
+  expect(await generationReport(caller.generateFromList({ text: 'sí' }))).toEqual({ capReached: false,
     results: [{ word: 'sí', status: 'added', vocabCards: 1, conjugationCards: 0 }],
     audio: { unspeakable: 1,
       message: 'Unsupported card audio HTML tag "<b>"; check cardGenerator output (expected plain text with <br> separators only).' },

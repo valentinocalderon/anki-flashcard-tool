@@ -5,9 +5,8 @@ import { loadConfig } from '@/lib/config';
 import { openaiLookup } from '@/lib/services/aiLookup';
 import { declinedCount, retryDeclined, sendPending, type SendReport } from '@/lib/services/ankiSender';
 import { awaitingAudioCount, backfillSentAudio, type AudioBackfillReport } from '@/lib/services/audioBackfill';
-import { generateForWords, type GenerationAudioReport } from '@/lib/services/listGenerationService';
+import { generateForWordsEvents } from '@/lib/services/listGenerationService';
 import { createSpanishVoice } from '@/lib/services/spanishVoice';
-import type { WordResult } from '@/lib/types';
 import { createTRPCRouter, publicProcedure } from '@/server/api/trpc';
 import { getDb } from '@/server/db';
 import { cards } from '@/server/db/schema';
@@ -15,13 +14,11 @@ import { cards } from '@/server/db/schema';
 export const ankiRouter = createTRPCRouter({
   generateFromList: publicProcedure
     .input(z.object({ text: z.string().min(1) }))
-    .mutation(async ({ input }): Promise<{
-      results: WordResult[]; capReached: boolean; audio: GenerationAudioReport; send: SendReport; backfill: AudioBackfillReport;
-    }> => {
+    .mutation(async function* ({ input }) {
       const db = await getDb();
       const client = createAnkiClient(loadConfig().anki.url);
       const voice = createSpanishVoice(loadConfig().audio, fetch);
-      const generation = await generateForWords(db, input.text, openaiLookup, fetch, voice);
+      const generation = yield* generateForWordsEvents(db, input.text, openaiLookup, fetch, voice);
       let send: SendReport;
       try {
         send = await sendPending(db, client);
@@ -33,7 +30,7 @@ export const ankiRouter = createTRPCRouter({
         };
       }
       const backfill = await backfillSentAudio(db, client, voice);
-      return { ...generation, capReached: voice.capReached, send, backfill };
+      yield { ...generation, capReached: voice.capReached, send, backfill };
     }),
   sendPending: publicProcedure.mutation(async (): Promise<{ send: SendReport; backfill: AudioBackfillReport; capReached: boolean }> => {
     const db = await getDb();

@@ -160,8 +160,10 @@ async function readPage(pageUrl: string, fetchImpl: typeof fetch): Promise<strin
   }
 }
 
-async function fetchDecks(links: string[], pageUrl: URL, fetchImpl: typeof fetch, firstHtml?: string): Promise<string[]> {
-  const sides: string[] = [];
+type DeckEvent = { link: string; sides: string[] };
+export type PackEvent = { links: string[] } | DeckEvent;
+
+async function* fetchDecks(links: string[], pageUrl: URL, fetchImpl: typeof fetch, firstHtml?: string): AsyncGenerator<DeckEvent, void> {
   for (const link of links) {
     const deckUrl = new URL(link, pageUrl).href;
     let deckHtml = firstHtml;
@@ -173,12 +175,11 @@ async function fetchDecks(links: string[], pageUrl: URL, fetchImpl: typeof fetch
     if (deckSides.length === 0) {
       throw new Error(`Brainscape deck ${deckUrl} contained ${deckSides.length} Spanish sides; check the page HTML.`);
     }
-    sides.push(...deckSides);
+    yield { link, sides: deckSides };
   }
-  return sides;
 }
 
-export async function fetchPack(url: string, fetchImpl: typeof fetch): Promise<string[]> {
+export async function* fetchPackEvents(url: string, fetchImpl: typeof fetch): AsyncGenerator<PackEvent, void> {
   const packUrl = new URL(url);
   const packId = /\/packs\/(\d+)\/?$/.exec(packUrl.pathname)?.[1];
   if (!packId) {
@@ -189,11 +190,30 @@ export async function fetchPack(url: string, fetchImpl: typeof fetch): Promise<s
   if (links.length === 0) {
     throw new Error(`Brainscape page ${packUrl.href} contained ${links.length} deck links for pack ${packId}; check the page HTML.`);
   }
-  return fetchDecks(links, packUrl, fetchImpl, html);
+  yield { links };
+  yield* fetchDecks(links, packUrl, fetchImpl, html);
+}
+
+export async function* fetchPackSetEvents(url: string, fetchImpl: typeof fetch): AsyncGenerator<PackEvent, void> {
+  const packSetUrl = new URL(url);
+  const html = await readPage(packSetUrl.href, fetchImpl);
+  const links = packSetLinks(html);
+  yield { links };
+  yield* fetchDecks(links, packSetUrl, fetchImpl);
+}
+
+export async function fetchPack(url: string, fetchImpl: typeof fetch): Promise<string[]> {
+  const sides: string[] = [];
+  for await (const event of fetchPackEvents(url, fetchImpl)) {
+    if ('sides' in event) sides.push(...event.sides);
+  }
+  return sides;
 }
 
 export async function fetchPackSet(url: string, fetchImpl: typeof fetch): Promise<string[]> {
-  const packSetUrl = new URL(url);
-  const html = await readPage(packSetUrl.href, fetchImpl);
-  return fetchDecks(packSetLinks(html), packSetUrl, fetchImpl);
+  const sides: string[] = [];
+  for await (const event of fetchPackSetEvents(url, fetchImpl)) {
+    if ('sides' in event) sides.push(...event.sides);
+  }
+  return sides;
 }

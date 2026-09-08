@@ -5,7 +5,7 @@ import type { WordInfo, WordResult } from '@/lib/types';
 import type { Db } from '@/server/db';
 import { cards, words } from '@/server/db/schema';
 import { askForJson } from './aiLookup';
-import { fetchPack, fetchPackSet, isPackSetUrl, isPackUrl } from './brainscapePack';
+import { fetchPackEvents, fetchPackSetEvents, isPackSetUrl, isPackUrl } from './brainscapePack';
 import { spanishSideItems, type BrainscapeItem } from './brainscapeSides';
 import { cardAudio } from './cardAudio';
 import { conjugationCards, generateCards, type GeneratedCard, type LookedUpItem } from './cardGenerator';
@@ -39,21 +39,27 @@ function errorResult(word: string, error: unknown): WordResult {
   };
 }
 
-async function inputItems(
+async function* inputItems(
   text: string,
   ask: AskForJson,
   fetchImpl: typeof fetch,
   results: WordResult[],
-): Promise<readonly BrainscapeItem[]> {
-  let sides: string[];
-  if (isPackSetUrl(text)) {
-    sides = await fetchPackSet(text.trim(), fetchImpl);
-  } else if (isPackUrl(text)) {
-    sides = await fetchPack(text.trim(), fetchImpl);
-  } else {
+): AsyncGenerator<GenerationEvent, readonly BrainscapeItem[]> {
+  const packEvents = isPackSetUrl(text) ? fetchPackSetEvents(text.trim(), fetchImpl)
+    : isPackUrl(text) ? fetchPackEvents(text.trim(), fetchImpl) : null;
+  if (packEvents === null) {
     return (await resolveWordList(text, ask)).map((spanish) => ({
       forms: [{ spanish, query: normalizeQuery(spanish) }],
     }));
+  }
+
+  const sides: string[] = [];
+  for await (const event of packEvents) {
+    if ('links' in event) yield event;
+    else {
+      sides.push(...event.sides);
+      yield { link: event.link };
+    }
   }
 
   const items: BrainscapeItem[] = [];
@@ -68,6 +74,12 @@ async function inputItems(
 }
 
 export type GenerationAudioReport = { unspeakable: number; message: string | null };
+type GenerationReport = Awaited<ReturnType<typeof generateForWords>>;
+export type GenerationEvent =
+  | { links: string[] }
+  | { link: string }
+  | { result: WordResult }
+  | GenerationReport;
 
 function audioIdentity(card: Pick<GeneratedCard, 'deck' | 'front'>) {
   return JSON.stringify([card.deck, card.front]);
@@ -183,6 +195,36 @@ async function generateItem(
   return { word, status: 'exists', ...counts };
 }
 
+export async function* generateForWordsEvents(
+  db: Db,
+  text: string,
+  lookup: (word: string) => Promise<WordInfo>,
+  fetchImpl: typeof fetch,
+  voice: ReturnType<typeof createSpanishVoice>,
+): AsyncGenerator<GenerationEvent, GenerationReport> {
+  const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+  const ask: AskForJson = (prompt, schema) => askForJson(prompt, schema, client);
+  const results: WordResult[] = [];
+  const audioFailures = new Map<string, string>();
+  const items: readonly BrainscapeItem[] = dedupeItems(yield* inputItems(text, ask, fetchImpl, results));
+  for (const result of results) yield { result };
+
+  for (const item of items) {
+    let result: WordResult;
+    try {
+      result = await generateItem(db, item, lookup, voice, audioFailures);
+    } catch (error) {
+      result = errorResult(item.forms.map((form) => form.spanish).join(' / '), error);
+    }
+    results.push(result);
+    yield { result };
+  }
+
+  const report = { results, capReached: voice.capReached, audio: await storedUnspeakable(db, audioFailures) };
+  yield report;
+  return report;
+}
+
 export async function generateForWords(
   db: Db,
   text: string,
@@ -190,19 +232,8 @@ export async function generateForWords(
   fetchImpl: typeof fetch,
   voice: ReturnType<typeof createSpanishVoice>,
 ): Promise<{ results: WordResult[]; capReached: boolean; audio: GenerationAudioReport }> {
-  const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
-  const ask: AskForJson = (prompt, schema) => askForJson(prompt, schema, client);
-  const results: WordResult[] = [];
-  const audioFailures = new Map<string, string>();
-  const items: readonly BrainscapeItem[] = dedupeItems(await inputItems(text, ask, fetchImpl, results));
-
-  for (const item of items) {
-    try {
-      results.push(await generateItem(db, item, lookup, voice, audioFailures));
-    } catch (error) {
-      results.push(errorResult(item.forms.map((form) => form.spanish).join(' / '), error));
-    }
-  }
-
-  return { results, capReached: voice.capReached, audio: await storedUnspeakable(db, audioFailures) };
+  const events = generateForWordsEvents(db, text, lookup, fetchImpl, voice);
+  let event = await events.next();
+  while (!event.done) event = await events.next();
+  return event.value;
 }

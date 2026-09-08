@@ -15,7 +15,7 @@ import { askForJson } from './aiLookup';
 import { spanishSideItems } from './brainscapeSides';
 import * as cardGenerator from './cardGenerator';
 import * as cardStore from './cardStore';
-import { dedupeItems, generateForWords } from './listGenerationService';
+import { dedupeItems, generateForWords, generateForWordsEvents, type GenerationEvent } from './listGenerationService';
 import * as lookupCache from './lookupCache';
 import { createSpanishVoice } from './spanishVoice';
 import * as wordListParser from './wordListParser';
@@ -96,6 +96,24 @@ const packSetUrl = 'https://www.brainscape.com/p/5M6OW-LH-D10NR';
 const singleDeckUrl = 'https://www.brainscape.com/flashcards/test/packs/42';
 const pack = readFileSync(new URL('./__fixtures__/brainscape/pack.html', import.meta.url), 'utf8');
 const packSet = readFileSync(new URL('./__fixtures__/brainscape/packset.html', import.meta.url), 'utf8');
+const packSetLinks = [
+  '/flashcards/38-vocabulary-level-2-part-1-level-2-bas-15113057/packs/21882519',
+  '/flashcards/39-verbs-level-2-part-1-level-2-basic-15113060/packs/21882519',
+  '/flashcards/40-the-numbers-level-2-basic-15113061/packs/21882519',
+  '/flashcards/42-the-time-level-2-basic-15113064/packs/21882519',
+  '/flashcards/44-possessives-1-level-2-basic-15113066/packs/21882519',
+  '/flashcards/46-expressing-possession-with-de-level-2-15113068/packs/21882519',
+  '/flashcards/48-to-have-to-have-to-level-2-basic-15113070/packs/21882519',
+  '/flashcards/50-can-can-t-level-2-basic-15113073/packs/21882519',
+  '/flashcards/52-vocabulary-level-2-part-2-level-2-bas-15113074/packs/21882519',
+  '/flashcards/53-verbs-level-2-part-2-level-2-basic-15113078/packs/21882519',
+  '/flashcards/54-demonstratives-level-2-basic-15113079/packs/21882519',
+  '/flashcards/56-to-want-to-prefer-to-need-level-2-bas-15113081/packs/21882519',
+  '/flashcards/58-i-like-i-love-i-m-interested-in-level-15113082/packs/21882519',
+  '/flashcards/60-vocabulary-level-2-basic-part-3-level-15113083/packs/21882519',
+  '/flashcards/61-be-going-to-level-2-basic-15113084/packs/21882519',
+  '/flashcards/63-window-words-2-level-2-basic-15113086/packs/21882519',
+];
 const greetings = readFileSync(new URL('./__fixtures__/brainscape/deck-common-greetings.html', import.meta.url), 'utf8');
 const nouns = readFileSync(new URL('./__fixtures__/brainscape/deck-nouns-articles.html', import.meta.url), 'utf8');
 const packWords = [
@@ -143,12 +161,20 @@ function servePackSet(sides: readonly string[]) {
   for (const side of sides) serveSides([side]);
 }
 
+async function collectGenerationEvents(events: AsyncIterable<GenerationEvent>): Promise<GenerationEvent[]> {
+  const received: GenerationEvent[] = [];
+  for await (const event of events) received.push(event);
+  return received;
+}
+
 function pageWithResults(results: WordResult[], capReached = false) {
-  const useState = vi.fn<() => [string | null | WordResult[], (results: WordResult[]) => void]>()
+  const useState = vi.fn<() => [string | null | WordResult[] | { capReached: boolean; audio: { unspeakable: number; message: null } }, (results: WordResult[]) => void]>()
     .mockReturnValue([null, vi.fn()])
     .mockReturnValueOnce(['', vi.fn()])
     .mockReturnValueOnce([null, vi.fn()])
-    .mockReturnValueOnce([results, vi.fn()]);
+    .mockReturnValueOnce([results, vi.fn()])
+    .mockReturnValueOnce([null, vi.fn()])
+    .mockReturnValueOnce([{ capReached, audio: { unspeakable: 0, message: null } }, vi.fn()]);
   const exports: { default?: () => React.ReactNode } = {};
   const api = { anki: {
     pendingCount: { useQuery: () => ({ data: 0 }) },
@@ -158,7 +184,7 @@ function pageWithResults(results: WordResult[], capReached = false) {
     sendPending: { useMutation: () => ({ isPending: false, reset: vi.fn() }) },
     retryDeclined: { useMutation: () => ({ isPending: false, reset: vi.fn() }) },
     generateFromList: {
-      useMutation: () => ({ isPending: false, isSuccess: true, data: { capReached, audio: { unspeakable: 0, message: null } } }),
+      useMutation: () => ({ isPending: false, isSuccess: true }),
     },
   } };
   pageScript.runInNewContext({
@@ -217,6 +243,224 @@ afterEach(() => {
   vi.useRealTimers();
   client.close();
   expect(askForJson).not.toHaveBeenCalled();
+});
+
+test('generation events yield all pack-set links and landed decks before deduped errors, folds and skipped items', async () => {
+  vi.useFakeTimers();
+  await db.insert(words).values([
+    { id: 1, query: '¡adiós!', info: JSON.stringify(goodbye), lookedUpAt: 123 },
+    { id: 2, query: 'casa', info: JSON.stringify(noun), lookedUpAt: 123 },
+  ]);
+  await db.insert(cards).values([
+    storedGoodbye,
+    { ...storedGoodbye, id: 2, wordId: 2, front: 'house', back: 'la casa' },
+  ]);
+  servePackSet([
+    '¡Adiós! / ¡Chao! / ¡ADIÓS!', '¡CHAO!', '¡Hola! /', 'Casa / CASA',
+    'casa', 'casa', 'casa', 'casa', 'casa', 'casa', 'casa', 'casa', 'casa', 'casa', 'casa', '¡Hola! /',
+  ]);
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>().mockResolvedValue({ ...goodbye, spanish: '¡Chao!' });
+  const events = generateForWordsEvents(db, ` \n${packSetUrl}\t `, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  expect(await events.next()).toEqual({ done: false, value: { links: packSetLinks } });
+  expect(fetchImpl).toHaveBeenCalledOnce();
+  for (const link of packSetLinks) {
+    const next = events.next();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await next).toEqual({ done: false, value: { link } });
+    expect(fetchImpl).toHaveBeenLastCalledWith(`https://www.brainscape.com${link}`, expect.any(Object));
+    expect(lookup).not.toHaveBeenCalled();
+  }
+  expect(fetchImpl).toHaveBeenCalledTimes(17);
+  const expectedResults: WordResult[] = [
+    { word: '¡Hola! /', status: 'error', vocabCards: 0, conjugationCards: 0,
+      message: 'Spanish side "¡Hola! /" has an empty form at position 2; check the Brainscape text.' },
+    { word: '¡Hola! /', status: 'error', vocabCards: 0, conjugationCards: 0,
+      message: 'Spanish side "¡Hola! /" has an empty form at position 2; check the Brainscape text.' },
+    { word: '¡Adiós! / ¡Chao!', status: 'updated', vocabCards: 0, conjugationCards: 0 },
+    { word: 'Casa', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
+  ];
+  for (const result of expectedResults) {
+    expect(await events.next()).toEqual({ done: false, value: { result } });
+  }
+  expect(await events.next()).toEqual({ done: false, value: {
+    results: expectedResults, capReached: false, audio: { unspeakable: 0, message: null },
+  } });
+  expect((await events.next()).done).toBe(true);
+  expect(lookup.mock.calls).toEqual([['¡Chao!']]);
+  expect(await db.select({ id: cards.id, back: cards.back, ankiNoteId: cards.ankiNoteId }).from(cards).orderBy(cards.id)).toEqual([
+    { id: 1, back: '¡Adiós! / ¡Chao!', ankiNoteId: 987654 },
+    { id: 2, back: 'la casa', ankiNoteId: 987654 },
+  ]);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test('generation events reuse a single pack deck before yielding its result and report', async () => {
+  serveSides(['casa']);
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>().mockResolvedValue(noun);
+
+  expect(await collectGenerationEvents(generateForWordsEvents(
+    db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl),
+  ))).toEqual([
+    { links: ['/flashcards/test/packs/42'] },
+    { link: '/flashcards/test/packs/42' },
+    { result: { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 } },
+    { results: [{ word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 }],
+      capReached: false, audio: { unspeakable: 0, message: null } },
+  ]);
+  expect(fetchImpl.mock.calls.filter(([, init]) => init?.method !== 'POST')).toHaveLength(1);
+});
+
+test('generation events yield a committed word result before starting the next lookup and yield only results and report', async () => {
+  let finishLookup: (info: WordInfo) => void = () => { throw new Error('Second lookup was not requested'); };
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>().mockResolvedValueOnce(noun)
+    .mockImplementationOnce(() => new Promise<WordInfo>((resolve) => { finishLookup = resolve; }));
+  const events = generateForWordsEvents(db, 'casa\n¡Adiós!', lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  expect(await events.next()).toEqual({ done: false, value: {
+    result: { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 },
+  } });
+  expect(lookup.mock.calls).toEqual([['casa']]);
+  expect(await db.select({ front: cards.front }).from(cards).orderBy(cards.id)).toEqual([
+    { front: 'house' }, { front: 'La ____ es grande.' },
+  ]);
+  const next = events.next();
+  let landed = false;
+  void next.then(() => { landed = true; }, () => { landed = true; });
+  await vi.waitFor(() => expect(lookup).toHaveBeenCalledTimes(2));
+  expect(landed).toBe(false);
+  finishLookup(goodbye);
+  expect(await next).toEqual({ done: false, value: {
+    result: { word: '¡Adiós!', status: 'added', vocabCards: 1, conjugationCards: 0 },
+  } });
+  expect(await events.next()).toEqual({ done: false, value: {
+    results: [
+      { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 },
+      { word: '¡Adiós!', status: 'added', vocabCards: 1, conjugationCards: 0 },
+    ], capReached: false, audio: { unspeakable: 0, message: null },
+  } });
+  expect((await events.next()).done).toBe(true);
+  expect(fetchImpl.mock.calls.filter(([, init]) => init?.method !== 'POST')).toEqual([]);
+});
+
+test.each(['lookup error', 'lookup string', 'lookup payload', 'voice error'])(
+  'generation events report an observed %s once, preserve committed cards and continue', async (failure) => {
+    const message = 'Service response interrupted';
+    const lookup = vi.fn<(word: string) => Promise<WordInfo>>().mockResolvedValueOnce(noun);
+    if (failure === 'lookup error') lookup.mockRejectedValueOnce(new Error(message));
+    if (failure === 'lookup string') lookup.mockRejectedValueOnce(message);
+    if (failure === 'lookup payload') lookup.mockResolvedValueOnce({ error: message });
+    if (failure === 'voice error') {
+      lookup.mockResolvedValueOnce({ ...goodbye, english: 'yes', spanish: 'sí' });
+      fetchImpl.mockResolvedValueOnce(new Response(new Uint8Array([1])))
+        .mockResolvedValueOnce(new Response(new Uint8Array([2])))
+        .mockRejectedValueOnce(new Error(message));
+    }
+    lookup.mockResolvedValueOnce(goodbye);
+    const expectedResults: WordResult[] = [
+      { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 },
+      { word: 'sí', status: 'error', vocabCards: 0, conjugationCards: 0, message },
+      { word: '¡Adiós!', status: 'added', vocabCards: 1, conjugationCards: 0 },
+    ];
+
+    expect(await collectGenerationEvents(generateForWordsEvents(
+      db, 'casa\nsí\nSÍ\n¡Adiós!', lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl),
+    ))).toEqual([
+      ...expectedResults.map((result) => ({ result })),
+      { results: expectedResults, capReached: false, audio: { unspeakable: 0, message: null } },
+    ]);
+    expect(lookup.mock.calls).toEqual([['casa'], ['sí'], ['¡Adiós!']]);
+    expect(await db.select({ front: cards.front }).from(cards).orderBy(cards.id)).toEqual([
+      { front: 'house' }, { front: 'La ____ es grande.' }, { front: 'goodbye' },
+    ]);
+  },
+);
+
+test.each([packUrl, packSetUrl])('generation events propagate discovery failures without a report for %s', async (url) => {
+  fetchImpl.mockResolvedValueOnce(new Response('Denied', { status: 403, statusText: 'Forbidden' }));
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>();
+  const events = generateForWordsEvents(db, url, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  await expect(events.next()).rejects.toThrow(
+    `Brainscape request for ${url} returned HTTP 403 Forbidden; check the response and retry.`,
+  );
+  expect((await events.next()).done).toBe(true);
+  expect(lookup).not.toHaveBeenCalled();
+  expect(await db.select().from(words)).toEqual([]);
+  expect(await db.select().from(cards)).toEqual([]);
+});
+
+test.each(['request', 'body'])('generation events retain landed deck progress and propagate a later %s failure without results', async (failure) => {
+  vi.useFakeTimers();
+  fetchImpl.mockResolvedValueOnce(new Response(packSet)).mockResolvedValueOnce(new Response(greetings));
+  const error = new Error(failure === 'request' ? 'connect ETIMEDOUT' : 'Response body stream terminated');
+  if (failure === 'request') fetchImpl.mockRejectedValueOnce(error);
+  else {
+    const response = new Response();
+    vi.spyOn(response, 'text').mockRejectedValueOnce(error);
+    fetchImpl.mockResolvedValueOnce(response);
+  }
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>();
+  const events = generateForWordsEvents(db, packSetUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  expect(await events.next()).toEqual({ done: false, value: { links: packSetLinks } });
+  const firstDeck = events.next();
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(await firstDeck).toEqual({ done: false, value: {
+    link: '/flashcards/38-vocabulary-level-2-part-1-level-2-bas-15113057/packs/21882519',
+  } });
+  const assertion = expect(events.next()).rejects.toBe(error);
+  await vi.runAllTimersAsync();
+  await assertion;
+  expect((await events.next()).done).toBe(true);
+  expect(fetchImpl).toHaveBeenCalledTimes(3);
+  expect(lookup).not.toHaveBeenCalled();
+  expect(await db.select().from(words)).toEqual([]);
+  expect(await db.select().from(cards)).toEqual([]);
+});
+
+test('generation events propagate word extraction failures without results or writes', async () => {
+  const error = new Error('Extraction response interrupted');
+  vi.spyOn(wordListParser, 'resolveWordList').mockRejectedValueOnce(error);
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>();
+  const events = generateForWordsEvents(db, 'some words', lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  await expect(events.next()).rejects.toBe(error);
+  expect((await events.next()).done).toBe(true);
+  expect(lookup).not.toHaveBeenCalled();
+  expect(fetchImpl).not.toHaveBeenCalled();
+  expect(await db.select().from(words)).toEqual([]);
+  expect(await db.select().from(cards)).toEqual([]);
+});
+
+test('generation events yield only the unchanged report for an empty word list', async () => {
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>();
+
+  expect(await collectGenerationEvents(generateForWordsEvents(
+    db, '', lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl),
+  ))).toEqual([{ results: [], capReached: false, audio: { unspeakable: 0, message: null } }]);
+  expect(lookup).not.toHaveBeenCalled();
+  expect(fetchImpl).not.toHaveBeenCalled();
+});
+
+test('generation events report the voice cap and stored unspeakable count after the item result', async () => {
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>().mockResolvedValue({
+    ...regularVerb, conjugations: { present: { yo: '<b>hablo</b>' }, preterite: { yo: 'hablé' } },
+  });
+
+  expect(await collectGenerationEvents(generateForWordsEvents(
+    db, 'hablar', lookup, fetchImpl, createSpanishVoice({ capCharacters: 6 }, fetchImpl),
+  ))).toEqual([
+    { result: { word: 'hablar', status: 'added', vocabCards: 1, conjugationCards: 2 } },
+    { results: [{ word: 'hablar', status: 'added', vocabCards: 1, conjugationCards: 2 }], capReached: true,
+      audio: { unspeakable: 1,
+        message: 'Unsupported card audio HTML tag "<b>"; check cardGenerator output (expected plain text with <br> separators only).' } },
+  ]);
+  expect(await db.select({ back: cards.back, audioMp3: cards.audioMp3 }).from(cards).orderBy(cards.id)).toEqual([
+    { back: 'hablar', audioMp3: Buffer.from([73, 68, 51]) },
+    { back: 'yo: <b>hablo</b>', audioMp3: null },
+    { back: 'yo: hablé', audioMp3: null },
+  ]);
 });
 
 test('dedupes normalized forms within and across items while preserving alternative groups', () => {
@@ -1752,11 +1996,13 @@ test.each([false, true])('voice wiring passes capReached %s through a successful
   vi.resetModules();
   vi.doMock('@/server/db', () => ({ getDb: async () => db }));
   vi.doMock('@/lib/services/listGenerationService', () => ({
-    generateForWords: vi.fn<typeof generateForWords>().mockImplementation(async (...args) => {
+    generateForWordsEvents: vi.fn<typeof generateForWordsEvents>().mockImplementation(async function* (...args) {
       if (capReached) await args[4].synthesize('a'.repeat(30001));
-      return { audio: { unspeakable: 0, message: null }, capReached, results: [
+      const report = { audio: { unspeakable: 0, message: null }, capReached, results: [
         { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 },
-      ] };
+      ] } satisfies Awaited<ReturnType<typeof generateForWords>>;
+      yield report;
+      return report;
     }),
   }));
   vi.doMock('@/lib/services/ankiSender', () => ({
@@ -1766,7 +2012,9 @@ test.each([false, true])('voice wiring passes capReached %s through a successful
     const { ankiRouter } = await import('@/server/api/routers/lookupRouter');
     const caller = ankiRouter.createCaller({ headers: new Headers() });
 
-    expect(await caller.generateFromList({ text: 'casa' })).toEqual({ audio: { unspeakable: 0, message: null }, capReached, results: [
+    const events = [];
+    for await (const event of await caller.generateFromList({ text: 'casa' })) events.push(event);
+    expect(events.at(-1)).toEqual({ audio: { unspeakable: 0, message: null }, capReached, results: [
       { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 },
     ], send: { status: 'sent', sent: 2, rejected: 0, pending: 0, syncedAt: 123 },
     backfill: { status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null } });

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { deckLinks, fetchPack, fetchPackSet, isPackSetUrl, isPackUrl, packSetLinks, spanishSides } from './brainscapePack';
+import { deckLinks, fetchPack, fetchPackEvents, fetchPackSet, fetchPackSetEvents, isPackSetUrl, isPackUrl, packSetLinks, spanishSides } from './brainscapePack';
 
 const packId = '21648778';
 const packUrl = `https://www.brainscape.com/packs/${packId}`;
@@ -22,6 +22,24 @@ const links = [
   '/flashcards/034-food-drinks-14150212/packs/21648778',
   '/flashcards/035-getting-around-14150217/packs/21648778',
   '/flashcards/041-pronunciation-gotchas-14150221/packs/21648778',
+];
+const setLinks = [
+  '/flashcards/38-vocabulary-level-2-part-1-level-2-bas-15113057/packs/21882519',
+  '/flashcards/39-verbs-level-2-part-1-level-2-basic-15113060/packs/21882519',
+  '/flashcards/40-the-numbers-level-2-basic-15113061/packs/21882519',
+  '/flashcards/42-the-time-level-2-basic-15113064/packs/21882519',
+  '/flashcards/44-possessives-1-level-2-basic-15113066/packs/21882519',
+  '/flashcards/46-expressing-possession-with-de-level-2-15113068/packs/21882519',
+  '/flashcards/48-to-have-to-have-to-level-2-basic-15113070/packs/21882519',
+  '/flashcards/50-can-can-t-level-2-basic-15113073/packs/21882519',
+  '/flashcards/52-vocabulary-level-2-part-2-level-2-bas-15113074/packs/21882519',
+  '/flashcards/53-verbs-level-2-part-2-level-2-basic-15113078/packs/21882519',
+  '/flashcards/54-demonstratives-level-2-basic-15113079/packs/21882519',
+  '/flashcards/56-to-want-to-prefer-to-need-level-2-bas-15113081/packs/21882519',
+  '/flashcards/58-i-like-i-love-i-m-interested-in-level-15113082/packs/21882519',
+  '/flashcards/60-vocabulary-level-2-basic-part-3-level-15113083/packs/21882519',
+  '/flashcards/61-be-going-to-level-2-basic-15113084/packs/21882519',
+  '/flashcards/63-window-words-2-level-2-basic-15113086/packs/21882519',
 ];
 
 const greetingSides = [
@@ -84,6 +102,217 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+
+const eventSources = [
+  { name: 'fetchPackEvents', stream: fetchPackEvents, url: packUrl, html: pack, expectedLinks: links },
+  { name: 'fetchPackSetEvents', stream: fetchPackSetEvents, url: packSetUrl, html: packSet, expectedLinks: setLinks },
+];
+
+test.each(eventSources)('$name yields the saved links first and each deck as its body lands in page order', async ({ stream, url, html, expectedLinks }) => {
+  let finishPageBody: (html: string) => void = () => { throw new Error('Page body was not requested'); };
+  let finishDeckBody: (html: string) => void = () => { throw new Error('Deck body was not requested'); };
+  const pageResponse = new Response();
+  const deckResponse = new Response();
+  vi.spyOn(pageResponse, 'text').mockImplementation(() => new Promise<string>((resolve) => { finishPageBody = resolve; }));
+  vi.spyOn(deckResponse, 'text').mockImplementation(() => new Promise<string>((resolve) => { finishDeckBody = resolve; }));
+  const timeout = vi.spyOn(AbortSignal, 'timeout');
+  const fetchImpl = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(pageResponse)
+    .mockResolvedValueOnce(deckResponse);
+  for (let index = 1; index < expectedLinks.length; index += 1) fetchImpl.mockResolvedValueOnce(new Response(nouns));
+
+  const events = stream(url, fetchImpl);
+  const first = events.next();
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(fetchImpl).toHaveBeenCalledOnce();
+  finishPageBody(html);
+  expect(await first).toEqual({ done: false, value: { links: expectedLinks } });
+  expect(fetchImpl).toHaveBeenCalledOnce();
+  for (const [index, link] of expectedLinks.entries()) {
+    const next = events.next();
+    let landed = false;
+    void next.then(() => { landed = true; }, () => { landed = true; });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(fetchImpl).toHaveBeenCalledTimes(index + 1);
+    expect(landed).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(index + 2);
+    if (index === 0) {
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(landed).toBe(false);
+      finishDeckBody(greetings);
+    }
+    expect(await next).toEqual({ done: false, value: { link, sides: index === 0 ? greetingSides : nounSides } });
+    expect(fetchImpl).toHaveBeenLastCalledWith(`https://www.brainscape.com${link}`, expect.any(Object));
+  }
+  expect(await events.next()).toEqual({ done: true, value: undefined });
+  for (const [, options] of fetchImpl.mock.calls) {
+    expect(new Headers(options?.headers).get('User-Agent')).toBe(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    );
+    expect(options?.signal).toBeInstanceOf(AbortSignal);
+  }
+  expect(timeout).toHaveBeenCalledTimes(expectedLinks.length + 1);
+  for (const call of timeout.mock.calls) expect(call).toEqual([15000]);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test('fetchPackEvents reuses the initial deck body and yields its sides before any delay or second fetch', async () => {
+  const url = 'https://www.brainscape.com/flashcards/011-common-greetings-14150191/packs/21648778';
+  const response = new Response(greetings);
+  const readBody = vi.spyOn(response, 'text');
+  const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(response);
+  for (let index = 1; index < links.length; index += 1) fetchImpl.mockResolvedValueOnce(new Response(nouns));
+
+  const events = fetchPackEvents(url, fetchImpl);
+  expect(await events.next()).toEqual({ done: false, value: { links } });
+  expect(await events.next()).toEqual({ done: false, value: { link: links[0], sides: greetingSides } });
+  expect(fetchImpl).toHaveBeenCalledOnce();
+  expect(readBody).toHaveBeenCalledOnce();
+  expect(vi.getTimerCount()).toBe(0);
+  for (const [index, link] of links.slice(1).entries()) {
+    const next = events.next();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(fetchImpl).toHaveBeenCalledTimes(index + 1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await next).toEqual({ done: false, value: { link, sides: nounSides } });
+    expect(fetchImpl).toHaveBeenCalledTimes(index + 2);
+    expect(fetchImpl).toHaveBeenLastCalledWith(`https://www.brainscape.com${link}`, expect.any(Object));
+  }
+  expect(await events.next()).toEqual({ done: true, value: undefined });
+  expect(readBody).toHaveBeenCalledOnce();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test.each(eventSources)('$name preserves discovery failures without yielding a links event', async ({ stream, url }) => {
+  const requestError = new Error('connect ETIMEDOUT');
+  const bodyError = new Error('Response body stream terminated');
+  const brokenBody = new Response();
+  vi.spyOn(brokenBody, 'text').mockRejectedValueOnce(bodyError);
+  const failures = [
+    { response: new Response('Request denied', { status: 403, statusText: 'Forbidden' }), error: new Error(`Brainscape request for ${url} returned HTTP 403 Forbidden; check the response and retry.`) },
+    { response: undefined, error: requestError },
+    { response: brokenBody, error: bodyError },
+    {
+      response: new Response('<html>No preview available</html>'),
+      error: new Error(url === packUrl
+        ? 'Brainscape page https://www.brainscape.com/packs/21648778 contained 0 deck links for pack 21648778; check the page HTML.'
+        : 'Brainscape page has no canonical link href; check the page HTML.'),
+    },
+  ];
+  for (const { response, error } of failures) {
+    const fetchImpl = vi.fn<typeof fetch>();
+    if (response) fetchImpl.mockResolvedValueOnce(response);
+    else fetchImpl.mockRejectedValueOnce(error);
+    const events = stream(url, fetchImpl);
+
+    await expect(events.next()).rejects.toThrow(error);
+    expect(await events.next()).toEqual({ done: true, value: undefined });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  }
+});
+
+test('fetchPackEvents preserves the missing pack id error before fetching', async () => {
+  const fetchImpl = vi.fn<typeof fetch>();
+  const events = fetchPackEvents('https://www.brainscape.com/learn/spanish', fetchImpl);
+
+  await expect(events.next()).rejects.toThrow(new Error(
+    'Brainscape URL https://www.brainscape.com/learn/spanish has no /packs/DIGITS path; use a public pack URL.',
+  ));
+  expect(fetchImpl).not.toHaveBeenCalled();
+});
+
+test.each(eventSources)('$name keeps the landed deck event and throws the observed error from the next deck', async ({ stream, url, html, expectedLinks }) => {
+  const deckUrl = `https://www.brainscape.com${expectedLinks[1]}`;
+  const requestError = new Error('connect ETIMEDOUT');
+  const bodyError = new Error('Response body stream terminated');
+  const brokenBody = new Response();
+  vi.spyOn(brokenBody, 'text').mockRejectedValueOnce(bodyError);
+  const failures = [
+    { response: new Response('Request denied', { status: 403, statusText: 'Forbidden' }), error: new Error(`Brainscape request for ${deckUrl} returned HTTP 403 Forbidden; check the response and retry.`) },
+    { response: undefined, error: requestError },
+    { response: brokenBody, error: bodyError },
+    { response: new Response('<html>No preview available</html>'), error: new Error(`Brainscape deck ${deckUrl} contained 0 Spanish sides; check the page HTML.`) },
+    { response: new Response(answerHtml('<p> </p>')), error: new Error('Card card-back-123 has no Spanish text; check the Brainscape HTML.') },
+  ];
+  for (const { response, error } of failures) {
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(html))
+      .mockResolvedValueOnce(new Response(greetings));
+    if (response) fetchImpl.mockResolvedValueOnce(response);
+    else fetchImpl.mockRejectedValueOnce(error);
+    const events = stream(url, fetchImpl);
+    expect(await events.next()).toEqual({ done: false, value: { links: expectedLinks } });
+    const firstDeck = events.next();
+    await vi.advanceTimersByTimeAsync(1000);
+    const landed = await firstDeck;
+    expect(landed).toEqual({ done: false, value: { link: expectedLinks[0], sides: greetingSides } });
+
+    const next = events.next();
+    const assertion = expect(next).rejects.toThrow(error);
+    await vi.runAllTimersAsync();
+    await assertion;
+    if (error === requestError || error === bodyError) await expect(next).rejects.toBe(error);
+    expect(await events.next()).toEqual({ done: true, value: undefined });
+    expect(landed).toEqual({ done: false, value: { link: expectedLinks[0], sides: greetingSides } });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(vi.getTimerCount()).toBe(0);
+  }
+});
+
+test.each(eventSources)('$name preserves the fifteen second request and body timeouts at discovery and after a landed deck', async ({ stream, url, html, expectedLinks }) => {
+  const timeoutReason = new DOMException('The operation timed out', 'TimeoutError');
+  const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((delay) => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(timeoutReason), delay);
+    return controller.signal;
+  });
+  for (const page of ['discovery', 'deck']) {
+    for (const failure of ['request', 'body']) {
+      const cause = failure === 'request' ? timeoutReason : new DOMException('The operation was aborted', 'AbortError');
+      const fetchImpl = vi.fn<typeof fetch>();
+      if (page === 'deck') {
+        fetchImpl.mockResolvedValueOnce(new Response(html));
+        fetchImpl.mockResolvedValueOnce(new Response(greetings));
+      }
+      fetchImpl.mockImplementationOnce((_url, options) => {
+        const signal = options?.signal;
+        if (!signal) return Promise.reject(new Error('Request has no abort signal'));
+        const stalled = new Promise<never>((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(cause), { once: true });
+        });
+        if (failure === 'request') return stalled;
+        const response = new Response();
+        vi.spyOn(response, 'text').mockReturnValueOnce(stalled);
+        return Promise.resolve(response);
+      });
+      const events = stream(url, fetchImpl);
+      if (page === 'deck') {
+        expect(await events.next()).toEqual({ done: false, value: { links: expectedLinks } });
+        const firstDeck = events.next();
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(await firstDeck).toEqual({ done: false, value: { link: expectedLinks[0], sides: greetingSides } });
+      }
+      const next = events.next();
+      let settled = false;
+      void next.then(() => { settled = true; }, () => { settled = true; });
+      await vi.advanceTimersByTimeAsync(page === 'discovery' ? 0 : 1000);
+      expect(timeout).toHaveBeenLastCalledWith(15000);
+      await vi.advanceTimersByTimeAsync(14999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+
+      const failedUrl = page === 'discovery' ? url : `https://www.brainscape.com${expectedLinks[1]}`;
+      await expect(next).rejects.toThrow(new Error(`Brainscape request for ${failedUrl} did not answer in time`));
+      await expect(next).rejects.toHaveProperty('cause', cause);
+      expect(await events.next()).toEqual({ done: true, value: undefined });
+      expect(fetchImpl).toHaveBeenCalledTimes(page === 'discovery' ? 1 : 3);
+      expect(vi.getTimerCount()).toBe(0);
+    }
+  }
 });
 
 test('distinguishes pack-set URLs from pack URLs and word lists', () => {

@@ -1,7 +1,7 @@
 import { createClient } from '@libsql/client';
 import { expect, test, vi } from 'vitest';
 import type * as AnkiSender from '@/lib/services/ankiSender';
-import type { generateForWords } from '@/lib/services/listGenerationService';
+import type { generateForWordsEvents } from '@/lib/services/listGenerationService';
 import type { WordResult } from '@/lib/types';
 import { applyMigrations, createDb } from '@/server/db';
 import { cards, words } from '@/server/db/schema';
@@ -177,9 +177,11 @@ test('an unexpected send failure preserves word results and counts only pending 
     vi.doMock('@/server/db', () => ({ getDb: () => Promise.resolve(db) }));
     vi.doMock('@/lib/services/aiLookup', () => ({ openaiLookup: vi.fn() }));
     vi.doMock('@/lib/services/listGenerationService', () => ({
-      generateForWords: vi.fn<typeof generateForWords>().mockImplementation(async (...args) => {
+      generateForWordsEvents: vi.fn<typeof generateForWordsEvents>().mockImplementation(async function* (...args) {
         await args[4].synthesize('a'.repeat(30001));
-        return { results, capReached: true, audio: { unspeakable: 0, message: null } };
+        const report = { results, capReached: true, audio: { unspeakable: 0, message: null } };
+        yield report;
+        return report;
       }),
     }));
     vi.doMock('@/lib/services/ankiSender', async (importOriginal) => ({
@@ -190,7 +192,9 @@ test('an unexpected send failure preserves word results and counts only pending 
     const caller = ankiRouter.createCaller({ headers: new Headers() });
 
     expect(await caller.pendingCount()).toBe(1);
-    expect(await caller.generateFromList({ text: 'casa' })).toEqual({
+    const events = [];
+    for await (const event of await caller.generateFromList({ text: 'casa' })) events.push(event);
+    expect(events.at(-1)).toEqual({
       results,
       capReached: true, audio: { unspeakable: 0, message: null },
       send: {

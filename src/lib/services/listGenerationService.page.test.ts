@@ -9,7 +9,22 @@ import { formatResultLine } from '@/lib/resultLine';
 import type { WordResult } from '@/lib/types';
 import type { SendReport } from './ankiSender';
 import type { AudioBackfillReport } from './audioBackfill';
-import type { GenerationAudioReport } from './listGenerationService';
+import type { GenerationAudioReport, GenerationEvent } from './listGenerationService';
+
+type RunReport = {
+  results: WordResult[]; capReached: boolean; audio: GenerationAudioReport; send: SendReport; backfill: AudioBackfillReport;
+};
+type RunEvent = GenerationEvent | RunReport;
+
+async function* reportEvents(report: RunReport): AsyncIterable<RunEvent> {
+  yield report;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
 
 // Use the existing in-memory page compilation pattern with real mutation observers.
 // React state and rendering are driven explicitly; this is not a useMutation mount.
@@ -48,9 +63,8 @@ function pageRun(pending = 1, declined = 1, awaitingAudio = 0) {
     .mockRejectedValue(new Error('Unexpected send request.'));
   const retry = vi.fn<() => Promise<{ send: SendReport; backfill: AudioBackfillReport; capReached: boolean }>>()
     .mockRejectedValue(new Error('Unexpected retry request.'));
-  const generate = vi.fn<(input: { text: string }) => Promise<{
-    results: WordResult[]; capReached: boolean; audio: GenerationAudioReport; send: SendReport; backfill: AudioBackfillReport;
-  }>>().mockRejectedValue(new Error('Unexpected generation request.'));
+  const generate = vi.fn<(input: { text: string }) => Promise<AsyncIterable<RunEvent>>>()
+    .mockRejectedValue(new Error('Unexpected generation request.'));
   const backfill = vi.fn<() => Promise<{ backfill: AudioBackfillReport; capReached: boolean }>>()
     .mockRejectedValue(new Error('Unexpected audio request.'));
   const voicing = pageMutation(client, backfill);
@@ -68,12 +82,16 @@ function pageRun(pending = 1, declined = 1, awaitingAudio = 0) {
     pendingCount: queries.pending, declinedCount: queries.declined, awaitingAudioCount: queries.awaitingAudio,
     sendPending: sending, retryDeclined: retrying, generateFromList: generation, backfillAudio: voicing,
   } };
-  const state: (string | SendReport | AudioBackfillReport | WordResult[] | null)[] = ['casa'];
+  type PageState = string | SendReport | AudioBackfillReport | WordResult[] | null
+    | { audio: GenerationAudioReport; capReached: boolean } | { total: number; finished: number };
+  const state: PageState[] = ['casa'];
   let stateIndex = 0;
-  const useState = (initial: string | SendReport | AudioBackfillReport | WordResult[] | null) => {
+  const useState = (initial: PageState) => {
     const index = stateIndex++;
     if (index === state.length) state.push(initial);
-    return [state[index], (value: string | SendReport | AudioBackfillReport | WordResult[] | null) => { state[index] = value; }];
+    return [state[index], (value: PageState | ((previous: PageState | undefined) => PageState)) => {
+      state[index] = typeof value === 'function' ? value(state[index]) : value;
+    }];
   };
   const exports: { default?: () => React.ReactNode } = {};
   pageScript.runInNewContext({
@@ -137,11 +155,11 @@ test.each(['onSend', 'onRetry'] as const)(
 
     let finish: (() => void) | undefined;
     page.generate.mockImplementationOnce(() => new Promise((resolve) => {
-      finish = () => resolve({ audio: { unspeakable: 0, message: null }, results: [
+      finish = () => resolve(reportEvents({ audio: { unspeakable: 0, message: null }, results: [
         { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 },
       ], capReached: true, send: {
         status: 'sent', sent: 2, rejected: 0, pending: 0, syncedAt: 123, message: null,
-      }, backfill: { status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null } });
+      }, backfill: { status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null } }));
     }));
     page.submit();
     await vi.waitFor(() => expect(page.generate).toHaveBeenCalledTimes(1));
@@ -164,11 +182,11 @@ test('a new generation clears the previous send report even when the pack reques
   const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(new Error('Unexpected network request.'));
   vi.stubGlobal('fetch', fetchImpl);
   const page = pageRun();
-  page.generate.mockResolvedValueOnce({ audio: { unspeakable: 0, message: null }, results: [
+  page.generate.mockResolvedValueOnce(reportEvents({ audio: { unspeakable: 0, message: null }, results: [
     { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 },
   ], capReached: false, send: {
     status: 'sent', sent: 2, rejected: 0, pending: 0, syncedAt: 123, message: null,
-  }, backfill: { status: 'sent', sent: 1, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null } });
+  }, backfill: { status: 'sent', sent: 1, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null } }));
   page.submit();
   await page.generation.run;
   expect(page.html()).not.toContain('Synced to AnkiWeb at ');
@@ -244,9 +262,9 @@ test.each(backfillOutcomes.flatMap((outcome) => ['generation', 'sending', 'retry
     const page = pageRun(0, 0, report.awaitingAudio);
     const send: SendReport = { status: 'nothing', sent: 0, rejected: 0, pending: 0, syncedAt: null, message: null };
     if (mutation === 'generation') {
-      page.generate.mockResolvedValueOnce({ audio: { unspeakable: 0, message: null }, results: [
+      page.generate.mockResolvedValueOnce(reportEvents({ audio: { unspeakable: 0, message: null }, results: [
         { word: 'casa', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
-      ], capReached: false, send, backfill: report });
+      ], capReached: false, send, backfill: report }));
       page.submit();
       await page.generation.run;
       expect(page.html().match(/<li\b[^>]*>.*?<\/li>/g)).toEqual([
@@ -306,9 +324,9 @@ test.each(sendBeforeBackfill.flatMap((outcome) => ['generation', 'sending', 'ret
     const page = pageRun(0, 0);
     const backfill: AudioBackfillReport = { status: 'sent', sent: 1, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null };
     if (mutation === 'generation') {
-      page.generate.mockResolvedValueOnce({ audio: { unspeakable: 0, message: null }, results: [
+      page.generate.mockResolvedValueOnce(reportEvents({ audio: { unspeakable: 0, message: null }, results: [
         { word: 'casa', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
-      ], capReached: false, send, backfill });
+      ], capReached: false, send, backfill }));
       page.submit();
       await page.generation.run;
     } else if (mutation === 'sending') {
@@ -328,10 +346,10 @@ test.each(sendBeforeBackfill.flatMap((outcome) => ['generation', 'sending', 'ret
 test.each(['generation', 'onSend', 'onRetry'] as const)(
   '%s clears an earlier partial backfill report before its new request fails', async (action) => {
     const page = pageRun();
-    page.generate.mockResolvedValueOnce({ audio: { unspeakable: 0, message: null }, results: [], capReached: false,
+    page.generate.mockResolvedValueOnce(reportEvents({ audio: { unspeakable: 0, message: null }, results: [], capReached: false,
       send: { status: 'nothing', sent: 0, rejected: 0, pending: 0, syncedAt: null, message: null },
       backfill: { status: 'failed', sent: 1, rejected: 0, awaitingAudio: 1, unspeakable: 0, failureStage: null, message: 'old backfill failure' },
-    });
+    }));
     page.submit();
     await page.generation.run;
     expect(page.html()).toContain('<p>1 card already in Anki gained audio.</p>');
@@ -380,6 +398,125 @@ const noBackfill: AudioBackfillReport = {
   status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 0, unspeakable: 0, message: null, failureStage: null,
 };
 
+test.each([true, false])('the page streams progress and stays pending until completion (pack: %s)', async (pack) => {
+  const page = pageRun();
+  const first = deferred<void>();
+  const second = deferred<void>();
+  const summary = deferred<void>();
+  const summaryConsumed = deferred<void>();
+  const report = deferred<void>();
+  const finish = deferred<void>();
+  const results: [WordResult, WordResult] = [
+    { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 },
+    { word: 'hogar', status: 'error', vocabCards: 0, conjugationCards: 0, message: 'Lookup returned HTTP 429.' },
+  ];
+  const links = ['deck-1', 'deck-2', 'deck-3', 'deck-4', 'deck-5', 'deck-6', 'deck-7', 'deck-8',
+    'deck-9', 'deck-10', 'deck-11', 'deck-12', 'deck-13', 'deck-14', 'deck-15', 'deck-16'];
+  page.generate.mockResolvedValueOnce((async function* (): AsyncIterable<RunEvent> {
+    await first.promise;
+    if (pack) {
+      yield { links };
+      yield { link: 'deck-1' };
+    }
+    yield { result: results[0] };
+    await second.promise;
+    if (pack) yield { link: 'deck-2' };
+    yield { result: results[1] };
+    await summary.promise;
+    yield { results, capReached: true, audio: { unspeakable: 1, message: 'Cannot speak this card.' } };
+    summaryConsumed.resolve();
+    await report.promise;
+    yield { results, capReached: true, audio: { unspeakable: 1, message: 'Cannot speak this card.' },
+      send: { status: 'sent', sent: 2, rejected: 0, pending: 0, syncedAt: 123, message: null }, backfill: noBackfill };
+    await finish.promise;
+  })());
+
+  expect(page.html()).not.toContain('role="status"');
+  page.submit();
+  expect(page.html()).toContain('role="status"');
+  expect(page.html()).toContain('Generating');
+  expect(page.html()).not.toContain('Deck links finished:');
+  first.resolve();
+  await vi.waitFor(() => expect(page.html()).toContain('<strong>casa</strong>: 2 vocab cards'));
+  expect(page.html()).not.toContain('<strong>hogar</strong>');
+  if (pack) expect(page.html()).toContain('Deck links finished: 1 of 16');
+  else expect(page.html()).not.toContain('Deck links finished:');
+  second.resolve();
+  await vi.waitFor(() => expect(page.html()).toContain('<strong>hogar</strong>'));
+  expect(page.html()).toContain('Lookup returned HTTP 429.');
+  expect(page.html().match(/<li\b/g)).toHaveLength(2);
+  if (pack) expect(page.html()).toContain('Deck links finished: 2 of 16');
+  else expect(page.html()).not.toContain('Deck links finished:');
+  expect(page.html()).toContain('role="status"');
+  expect(page.html().match(/<button[^>]*disabled=""/g)).toHaveLength(3);
+  page.submit();
+  expect(page.generate).toHaveBeenCalledOnce();
+  summary.resolve();
+  await summaryConsumed.promise;
+  expect(page.html()).not.toContain('Synced to AnkiWeb');
+  expect(page.html()).not.toContain('Audio cap reached');
+  report.resolve();
+  await vi.waitFor(() => expect(page.html()).toContain('Synced to AnkiWeb'));
+  expect(page.html()).toContain('Audio cap reached for this run.');
+  expect(page.html()).toContain('During generation, 1 card could not be spoken.');
+  expect(page.html()).toContain('role="status"');
+  expect(page.queries.pending.refetch).not.toHaveBeenCalled();
+  page.storedCounts.pending = 0;
+  page.storedCounts.declined = 0;
+  finish.resolve();
+  await page.generation.run;
+  expect(page.html()).not.toContain('role="status"');
+  expect(page.html()).not.toContain('Deck links finished:');
+  expect(page.html()).not.toContain('disabled=""');
+  expect(page.html().match(/<li\b/g)).toHaveLength(2);
+  expect(page.queries.pending.refetch).toHaveBeenCalledOnce();
+  expect(page.queries.declined.refetch).toHaveBeenCalledOnce();
+  expect(page.queries.awaitingAudio.refetch).toHaveBeenCalledOnce();
+
+  const next = deferred<AsyncIterable<RunEvent>>();
+  page.generate.mockReturnValueOnce(next.promise);
+  page.submit();
+  await vi.waitFor(() => expect(page.generate).toHaveBeenCalledTimes(2));
+  expect(page.html()).toContain('role="status"');
+  expect(page.html()).not.toContain('Deck links finished:');
+  expect(page.html()).not.toContain('<strong>casa</strong>');
+  next.resolve(reportEvents({ results: [], audio: { unspeakable: 0, message: null },
+    capReached: false, send: noSend, backfill: noBackfill }));
+  await page.generation.run;
+  expect(page.html()).toContain('No words found in the text.');
+});
+
+test.each(['request', 'stream'] as const)('a rejected %s shows the observed error and refreshes stored counts', async (failure) => {
+  const page = pageRun(0, 0, 0);
+  const stop = deferred<void>();
+  const error = new Error('Brainscape pack request failed: HTTP 503.');
+  if (failure === 'request') page.generate.mockImplementationOnce(async () => { await stop.promise; throw error; });
+  else page.generate.mockResolvedValueOnce((async function* (): AsyncIterable<RunEvent> {
+    yield { result: { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 } };
+    await stop.promise;
+    throw error;
+  })());
+  page.submit();
+  expect(page.html()).toContain('role="status"');
+  if (failure === 'stream') await vi.waitFor(() => expect(page.html()).toContain('<strong>casa</strong>'));
+  page.storedCounts.pending = 3;
+  page.storedCounts.declined = 2;
+  page.storedCounts.awaitingAudio = 1;
+  stop.resolve();
+  await expect(page.generation.run).rejects.toThrow('Brainscape pack request failed: HTTP 503.');
+  expect(page.html()).toContain('<p role="alert" class="text-red-600">Brainscape pack request failed: HTTP 503.</p>');
+  expect(page.html()).not.toContain('role="status"');
+  expect(page.html()).not.toContain('disabled=""');
+  expect(page.html()).not.toContain('Synced to AnkiWeb');
+  if (failure === 'stream') expect(page.html()).toContain('<strong>casa</strong>: 2 vocab cards');
+  expect(page.html()).toContain('Send 3 pending cards');
+  expect(page.html()).toContain('Retry 2 declined cards');
+  expect(page.html()).toContain('Voice 1 card waiting for audio');
+  expect(page.queries.pending.refetch).toHaveBeenCalledOnce();
+  expect(page.queries.declined.refetch).toHaveBeenCalledOnce();
+  expect(page.queries.awaitingAudio.refetch).toHaveBeenCalledOnce();
+});
+
 test('the audio count and control use the footer pattern and disable every action while voicing', async () => {
   const page = pageRun(2, 1, 3);
   expect(page.html()).toContain('<p>3 cards are waiting for audio.</p>');
@@ -415,7 +552,7 @@ test.each(['generation', 'onSend', 'onRetry', 'onVoice'] as const)(
     const page = pageRun(2, 1, 4);
     const backfill: AudioBackfillReport = { status: 'failed', sent: 1, rejected: 1, awaitingAudio: 2,
       unspeakable: 1, message: 'note was not found: 102', failureStage: 'updateNoteFields' };
-    page.generate.mockResolvedValueOnce({ results: [], audio: { unspeakable: 0, message: null }, capReached: true, send: noSend, backfill });
+    page.generate.mockResolvedValueOnce(reportEvents({ results: [], audio: { unspeakable: 0, message: null }, capReached: true, send: noSend, backfill }));
     page.send.mockResolvedValueOnce({ capReached: true, send: noSend, backfill });
     page.retry.mockResolvedValueOnce({ capReached: true, send: noSend, backfill });
     page.backfill.mockResolvedValueOnce({ capReached: true, backfill });
@@ -441,12 +578,12 @@ test.each(['generation', 'onSend', 'onRetry', 'onVoice'] as const)(
 
 test('generation reports unspeakable cards without changing the result line or adding overlapping counts', async () => {
   const page = pageRun(0, 0, 1);
-  page.generate.mockResolvedValueOnce({ capReached: false,
+  page.generate.mockResolvedValueOnce(reportEvents({ capReached: false,
     results: [{ word: 'hablar', status: 'added', vocabCards: 1, conjugationCards: 2 }],
     audio: { unspeakable: 1, message: 'Unsupported card audio HTML tag "<b>"; check cardGenerator output (expected plain text with <br> separators only).' },
     send: noSend, backfill: { ...noBackfill, status: 'failed', awaitingAudio: 1, unspeakable: 1,
       failureStage: 'prepare', message: 'Unsupported card audio HTML tag "<b>"; check cardGenerator output (expected plain text with <br> separators only).' },
-  });
+  }));
   page.submit();
   await page.generation.run;
   expect(page.html()).toContain('<p>During generation, 1 card could not be spoken.</p>');
@@ -501,8 +638,8 @@ test.each((['generation', 'onSend', 'onRetry', 'onVoice'] as const).flatMap((act
       await expect(page.voicing.run).rejects.toThrow('old audio request failure');
       expect(page.html()).toContain('old audio request failure');
     }
-    page.generate.mockResolvedValueOnce({ results: [], audio: { unspeakable: 0, message: null }, capReached: false,
-      send: noSend, backfill: noBackfill });
+    page.generate.mockResolvedValueOnce(reportEvents({ results: [], audio: { unspeakable: 0, message: null }, capReached: false,
+      send: noSend, backfill: noBackfill }));
     page.send.mockResolvedValueOnce({ capReached: false, send: noSend, backfill: noBackfill });
     page.retry.mockResolvedValueOnce({ capReached: false, send: noSend, backfill: noBackfill });
     page.backfill.mockResolvedValueOnce({ capReached: false, backfill: noBackfill });
