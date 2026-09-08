@@ -360,6 +360,119 @@ test.each([
   expect(lookup).toHaveBeenCalledExactlyOnceWith(remaining);
 });
 
+test.each(['word query', 'recorded form'])(
+  'refuses a partly carded fold owned by distinct basic cards through %s before lookup or writes',
+  async (ownership) => {
+    const storedWords = [
+      { id: 1, query: '¡adiós!', info: JSON.stringify(goodbye), lookedUpAt: 123 },
+      { id: 2, query: ownership === 'word query' ? '¡chao!' : 'hasta pronto',
+        info: JSON.stringify({ ...goodbye, spanish: '¡Chao!', english: 'bye' }), lookedUpAt: 123 },
+    ];
+    const storedCards = [
+      storedGoodbye,
+      { ...storedGoodbye, id: 2, wordId: 2, front: 'bye', back: '¡Chao!', ankiNoteId: 987655,
+        forms: ownership === 'word query' ? null : [{ spanish: '¡Chao!', query: ' ¡CHAO!\t' }] },
+    ];
+    await db.insert(words).values(storedWords);
+    await db.insert(cards).values(storedCards);
+    serveSides(['Hasta luego / ¡Adiós! / ¡Chao!']);
+    const cached = vi.spyOn(lookupCache, 'cachedLookup');
+    const store = vi.spyOn(cardStore, 'storeCards');
+    const lookup = vi.fn<(word: string) => Promise<WordInfo>>()
+      .mockResolvedValue({ ...goodbye, spanish: 'Hasta luego', english: 'see you later' });
+
+    const results = await generateForWords(db, singleDeckUrl, lookup, fetchImpl);
+
+    expect(results).toEqual([
+      {
+        word: 'Hasta luego / ¡Adiós! / ¡Chao!', status: 'error', vocabCards: 0, conjugationCards: 0,
+        message: 'Cannot fold "Hasta luego / ¡Adiós! / ¡Chao!": its forms are already owned by 2 different basic cards; card the forms one at a time.',
+      },
+    ]);
+    expect(cached).not.toHaveBeenCalled();
+    expect(lookup).not.toHaveBeenCalled();
+    expect(store).not.toHaveBeenCalled();
+    expect(await db.select().from(words).orderBy(words.id)).toEqual(storedWords);
+    expect(await db.select().from(cards).orderBy(cards.id)).toEqual(storedCards);
+    expect(await db.select().from(conjugationPatterns)).toEqual([]);
+    expect(renderToStaticMarkup(pageWithResults(results)).match(/<li\b[^>]*>.*?<\/li>/g)).toEqual([
+      '<li class="bg-gray-100 p-3 rounded"><span aria-hidden="true" class="text-xs mr-2">!</span><strong>Hasta luego / ¡Adiós! / ¡Chao!</strong>: Cannot fold &quot;Hasta luego / ¡Adiós! / ¡Chao!&quot;: its forms are already owned by 2 different basic cards; card the forms one at a time.</li>',
+    ]);
+  },
+);
+
+test('skips an all-forms-carded fold even when different basic cards own its forms', async () => {
+  const storedWords = [
+    { id: 1, query: '¡adiós!', info: 'unreadable cache', lookedUpAt: 123 },
+    { id: 2, query: '¡chao!', info: 'unreadable cache', lookedUpAt: 123 },
+  ];
+  const storedCards = [
+    storedGoodbye,
+    { ...storedGoodbye, id: 2, wordId: 2, front: 'bye', back: '¡Chao!', ankiNoteId: 987655 },
+  ];
+  await db.insert(words).values(storedWords);
+  await db.insert(cards).values(storedCards);
+  serveSides(['¡Adiós! / ¡Chao!']);
+  const cached = vi.spyOn(lookupCache, 'cachedLookup');
+  const store = vi.spyOn(cardStore, 'storeCards');
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>();
+
+  expect(await generateForWords(db, singleDeckUrl, lookup, fetchImpl)).toEqual([
+    { word: '¡Adiós! / ¡Chao!', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
+  ]);
+  expect(cached).not.toHaveBeenCalled();
+  expect(lookup).not.toHaveBeenCalled();
+  expect(store).not.toHaveBeenCalled();
+  expect(await db.select().from(words).orderBy(words.id)).toEqual(storedWords);
+  expect(await db.select().from(cards).orderBy(cards.id)).toEqual(storedCards);
+});
+
+test.each(['success', 'throw', 'payload'])(
+  'keeps single-card enrichment behavior when two forms share an owner and lookup returns %s',
+  async (outcome) => {
+    const storedWords = [
+      { id: 1, query: '¡adiós!', info: JSON.stringify(goodbye), lookedUpAt: 123 },
+      { id: 2, query: '¡chao!',
+        info: JSON.stringify({ ...goodbye, spanish: '¡Chao!', english: 'bye' }), lookedUpAt: 123 },
+    ];
+    const owner = { ...storedGoodbye, back: '¡Adiós! / ¡Chao!', forms: [
+      { spanish: '¡Adiós!', query: '¡adiós!' }, { spanish: '¡Chao!', query: '¡chao!' },
+    ] };
+    await db.insert(words).values(storedWords);
+    await db.insert(cards).values(owner);
+    serveSides(['¡Adiós! / ¡Chao! / Hasta luego']);
+    const lookup = vi.fn<(word: string) => Promise<WordInfo>>()
+      .mockResolvedValue({ ...goodbye, spanish: 'Hasta luego', english: 'see you later' });
+    if (outcome === 'throw') lookup.mockRejectedValueOnce(new Error('Lookup timed out after 1000 ms'));
+    if (outcome === 'payload') lookup.mockResolvedValueOnce({ ...goodbye, error: 'Lookup returned HTTP 503' });
+
+    const results = await generateForWords(db, singleDeckUrl, lookup, fetchImpl);
+
+    expect(lookup).toHaveBeenCalledExactlyOnceWith('Hasta luego');
+    if (outcome === 'success') {
+      expect(results).toEqual([
+        { word: '¡Adiós! / ¡Chao! / Hasta luego', status: 'updated', vocabCards: 0, conjugationCards: 0 },
+      ]);
+      expect(await db.select().from(cards)).toEqual([{
+        ...owner, back: '¡Adiós! / ¡Chao! / Hasta luego', forms: [
+          { spanish: '¡Adiós!', query: '¡adiós!' }, { spanish: '¡Chao!', query: '¡chao!' },
+          { spanish: 'Hasta luego', query: 'hasta luego' },
+        ],
+      }]);
+    } else {
+      expect(results).toEqual([
+        {
+          word: '¡Adiós! / ¡Chao! / Hasta luego', status: 'error', vocabCards: 0, conjugationCards: 0,
+          message: outcome === 'throw' ? 'Lookup timed out after 1000 ms' : 'Lookup returned HTTP 503',
+        },
+      ]);
+      expect(await db.select().from(words).orderBy(words.id)).toEqual(storedWords);
+      expect(await db.select().from(cards)).toEqual([owner]);
+    }
+    expect(await db.select().from(conjugationPatterns)).toEqual([]);
+  },
+);
+
 test('enriches a carded goodbye in place with its pack alternative, preserving the Anki note', async () => {
   const lookup = vi.fn<(word: string) => Promise<WordInfo>>().mockResolvedValue(goodbye);
   expect(await generateForWords(db, '¡adiós!', lookup, fetchImpl)).toEqual([

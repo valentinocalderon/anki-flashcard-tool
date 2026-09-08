@@ -76,7 +76,14 @@ async function generateItem(
   if (cardsByForm.every((rows) => rows.length > 0)) {
     return { word, status: 'skipped', vocabCards: 0, conjugationCards: 0 };
   }
-  const foldedCardId = cardsByForm.flat().find((row) => row.kind === 'basic')?.cardId;
+  const foldedCardIds = [...new Set(cardsByForm.flat()
+    .filter((row) => row.kind === 'basic').map((row) => row.cardId))];
+  if (foldedCardIds.length > 1) {
+    return errorResult(word,
+      `Cannot fold "${word}": its forms are already owned by ${foldedCardIds.length} different basic cards; card the forms one at a time.`,
+    );
+  }
+  const foldedCardId = foldedCardIds[0];
 
   const lookedUp: LookedUpItem = { forms: [] };
   for (const form of item.forms) {

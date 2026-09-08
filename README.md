@@ -21,6 +21,8 @@ Paste a Brainscape pack URL alone in the box to fetch every deck and make cards 
 
 Each result line shows its outcome: ✓ added, ↻ updated, – already existed or skipped, and ! failed. An updated result means the saved card changed; check Anki if it was already sent. The send report shows delivery and sync status. After a successful sync, sync Anki on your phone to study the cards.
 
+Migration note: the first pack re-run after the forms migration reports updated once per old folded card, and nothing in Anki changed.
+
 ## Decks and cards
 
 - **Spanish::Vocab**: vocabulary cards use **Basic (and reversed card)** for English ↔ Spanish; fill-in-the-blank example cards use **Basic**.
