@@ -97,6 +97,16 @@ export function spanishSides(html: string): string[] {
   return sides;
 }
 
+export function isPackUrl(text: string): boolean {
+  const value = text.trim();
+  if (/\s/.test(value) || !URL.canParse(value)) return false;
+
+  const url = new URL(value);
+  return (url.protocol === 'http:' || url.protocol === 'https:')
+    && (url.hostname === 'brainscape.com' || url.hostname.endsWith('.brainscape.com'))
+    && /\/packs\/\d+\/?$/.test(url.pathname);
+}
+
 export async function fetchPack(url: string, fetchImpl: typeof fetch): Promise<string[]> {
   const packUrl = new URL(url);
   const packId = /\/packs\/(\d+)\/?$/.exec(packUrl.pathname)?.[1];

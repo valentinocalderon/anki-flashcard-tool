@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { deckLinks, fetchPack, spanishSides } from './brainscapePack';
+import { deckLinks, fetchPack, isPackUrl, spanishSides } from './brainscapePack';
 
 const packId = '21648778';
 const packUrl = `https://www.brainscape.com/packs/${packId}`;
@@ -22,6 +22,48 @@ const links = [
   '/flashcards/041-pronunciation-gotchas-14150221/packs/21648778',
 ];
 
+const greetingSides = [
+  '¡Hola!',
+  '¡Adiós! / ¡Chao!',
+  '¡Buenos días!',
+  '¡Buenas tardes!',
+  '¡Buenas!',
+  '¿Hablas inglés?',
+  'Hablo inglés.',
+  'No hablo español.',
+  'Man: ¡Gracias! Woman: ¡De nada!',
+  '¡Buenas noches!',
+  'Woman: ¿Habla inglés? Man: Sí.',
+  'Hola, me llamo Sam.',
+  '¿Cómo te llamas?',
+  'Man: ¿Habla español? Woman: Un poco.',
+  '¡Mucho gusto!',
+  'Igualmente. / Igual.',
+  'Hombre: ¿Cómo te llamas? Mujer: Me llamo Jenny. Mucho gusto. Hombre: ¡Igual!',
+];
+const nounSides = [
+  'una mujer',
+  'un hombre',
+  'la mujer',
+  'el hombre',
+  'un muchacho / un chico',
+  'la muchacha / la chica',
+  'un niño',
+  'una niña',
+  'los niños',
+  'las niñas',
+  'unos hombres',
+  'unas mujeres',
+  'un chico y una chica',
+  'los hombres y las mujeres',
+  'una alumna / una estudiante',
+  'un profesor / un maestro',
+  'una profesora',
+  'la casa',
+  'el dinero',
+  'los carros / los coches',
+];
+
 function answerHtml(face: string) {
   return `<div id='card-back-123' class='answer-contents extra flashcard-contents'>
     <div class='preview-html'><div class='scf-face'>${face}</div></div>
@@ -40,6 +82,37 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+
+test.each([
+  'https://www.brainscape.com/packs/21648778',
+  'https://www.brainscape.com/packs/42/',
+  ' \n\thttps://brainscape.com/packs/42\t ',
+  'http://BRAINSCAPE.com/packs/42',
+  'https://learn.brainscape.com/flashcards/greetings/packs/42?source=share#cards',
+])('recognizes one whole Brainscape pack URL: %s', (text) => {
+  expect(isPackUrl(text)).toBe(true);
+});
+
+test.each([
+  '', 'casa', 'not a URL',
+  'https://www.brainscape.com/packs/42\ncasa',
+  'https://www.brainscape.com/packs/42 https://www.brainscape.com/packs/43',
+  'https://www.brainscape.com/pa\ncks/42',
+  'https://www.brainscape.com/packs/42?source=two words',
+  'ftp://www.brainscape.com/packs/42',
+  'https://notbrainscape.com/packs/42',
+  'https://brainscape.com.example.com/packs/42',
+  'https://brainscape.com@other.example/packs/42',
+  'https://www.brainscape.com/learn/spanish',
+  'https://www.brainscape.com/packs/42//',
+  'https://www.brainscape.com/packs/42/decks',
+  'https://www.brainscape.com/packs/42abc',
+  'https://www.brainscape.com/packs/',
+  'https://www.brainscape.com/packs/４２',
+  '/packs/42',
+])('keeps other textarea contents in word-list mode: %s', (text) => {
+  expect(isPackUrl(text)).toBe(false);
 });
 
 test.each([
@@ -67,59 +140,19 @@ test('dedupes hrefs, matches the whole pack id, and ignores non-href text', () =
 });
 
 test('extracts every answer without footnotes from the common greetings fixture in page order', () => {
-  expect(spanishSides(greetings)).toEqual([
-    '¡Hola!',
-    '¡Adiós! / ¡Chao!',
-    '¡Buenos días!',
-    '¡Buenas tardes!',
-    '¡Buenas!',
-    '¿Hablas inglés?',
-    'Hablo inglés.',
-    'No hablo español.',
-    'Man: ¡Gracias! Woman: ¡De nada!',
-    '¡Buenas noches!',
-    'Woman: ¿Habla inglés? Man: Sí.',
-    'Hola, me llamo Sam.',
-    '¿Cómo te llamas?',
-    'Man: ¿Habla español? Woman: Un poco.',
-    '¡Mucho gusto!',
-    'Igualmente. / Igual.',
-    'Hombre: ¿Cómo te llamas? Mujer: Me llamo Jenny. Mucho gusto. Hombre: ¡Igual!',
-  ]);
+  expect(spanishSides(greetings)).toEqual(greetingSides);
 });
 
 test('extracts every answer from the nouns and articles fixture, without footnotes, CSS or question text', () => {
   const sides = spanishSides(nouns);
 
-  expect(sides).toEqual([
-    'una mujer',
-    'un hombre',
-    'la mujer',
-    'el hombre',
-    'un muchacho / un chico',
-    'la muchacha / la chica',
-    'un niño',
-    'una niña',
-    'los niños',
-    'las niñas',
-    'unos hombres',
-    'unas mujeres',
-    'un chico y una chica',
-    'los hombres y las mujeres',
-    'una alumna / una estudiante',
-    'un profesor / un maestro',
-    'una profesora',
-    'la casa',
-    'el dinero',
-    'los carros / los coches',
-  ]);
+  expect(sides).toEqual(nounSides);
   for (const side of sides) {
     expect(side.length).toBeGreaterThan(0);
     expect(side).not.toMatch(/[<>]/);
     expect(side).not.toMatch(/&(?:#\w+|[a-z]+);/i);
     expect(side).not.toContain('Translate to Spanish:');
     expect(side).not.toContain('Study These Flashcards');
-    expect(side).toBe(side.replace(/\s+/g, ' ').trim());
   }
 });
 
@@ -211,7 +244,7 @@ test('fetches the saved pack and each deck sequentially, with a Chrome user agen
     expect(fetchImpl).toHaveBeenCalledTimes(index + 2);
   }
 
-  expect(await result).toEqual(links.flatMap((_, index) => spanishSides(index === 0 ? greetings : nouns)));
+  expect(await result).toEqual(links.flatMap((_, index) => index === 0 ? greetingSides : nounSides));
   expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([packUrl, ...links.map((link) => new URL(link, packUrl).href)]);
   for (const [, options] of fetchImpl.mock.calls) {
     const agent = new Headers(options?.headers).get('User-Agent');
@@ -229,7 +262,7 @@ test('reuses the initial deck HTML when the supplied pack URL is a deck URL', as
   const result = fetchPack(url, fetchImpl);
   await vi.runAllTimersAsync();
 
-  expect(await result).toEqual(links.flatMap((_, index) => spanishSides(index === 0 ? greetings : nouns)));
+  expect(await result).toEqual(links.flatMap((_, index) => index === 0 ? greetingSides : nounSides));
   expect(fetchImpl.mock.calls.map(([requested]) => requested)).toEqual(links.map((link) => new URL(link, packUrl).href));
 });
 

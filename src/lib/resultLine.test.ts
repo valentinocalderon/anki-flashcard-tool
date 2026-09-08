@@ -19,6 +19,22 @@ test('formats an existing word as already stored', () => {
   })).toBe('already stored');
 });
 
+test('says the stored card changed and asks to check Anki if it was already sent', () => {
+  expect(formatResultLine({
+    word: '¡Adiós! / ¡Chao!', status: 'updated', vocabCards: 0, conjugationCards: 0,
+  })).toBe('updated: stored card changed; check Anki if this card was already sent');
+});
+
+test.each([
+  { vocabCards: 0, conjugationCards: 2, expected: '2 conjugation cards added; updated: stored card changed; check Anki if this card was already sent' },
+  { vocabCards: 1, conjugationCards: 0, expected: '1 vocab card added; updated: stored card changed; check Anki if this card was already sent' },
+  { vocabCards: 1, conjugationCards: 1, expected: '1 vocab card plus 1 conjugation card added; updated: stored card changed; check Anki if this card was already sent' },
+])('keeps inserted counts and the conditional Anki warning together: %j', ({ vocabCards, conjugationCards, expected }) => {
+  expect(formatResultLine({
+    word: 'hablar / platicar', status: 'updated', vocabCards, conjugationCards,
+  })).toBe(expected);
+});
+
 test('names a skipped word and why it was skipped', () => {
   expect(formatResultLine({
     word: 'casa', status: 'skipped', vocabCards: 0, conjugationCards: 0,

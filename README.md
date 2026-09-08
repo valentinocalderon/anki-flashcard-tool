@@ -17,9 +17,9 @@ Turn pasted words or text into Spanish vocabulary, example-sentence, and conjuga
 
 ## One-click flow
 
-Pasted text may use lines, commas, semicolons, bullets or numbering, or a plain sentence. Click **Generate and send to Anki**. The app looks up each word, saves new cards, sends pending cards to Anki, and requests an AnkiWeb sync.
+Paste a Brainscape pack URL alone in the box to fetch every deck and make cards from each card's Spanish side, deduped against what is already stored. Anything else is a word list: lines, commas, semicolons, bullets, numbering, or a plain sentence. Click **Generate and send to Anki**. The app looks up each word, saves new cards, sends pending cards to Anki, and requests an AnkiWeb sync.
 
-Each result line shows what was added, already existed, or failed. The send report shows delivery and sync status. After a successful sync, sync Anki on your phone to study the cards.
+Each result line shows what was added, updated, already existed, or failed. The send report shows delivery and sync status. After a successful sync, sync Anki on your phone to study the cards.
 
 ## Decks and cards
 

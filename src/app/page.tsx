@@ -70,7 +70,7 @@ export default function HomePage() {
         }}
         className="flex flex-col gap-3 mb-6"
       >
-        <label htmlFor="words" className="font-semibold">Words, any way you like: lines, commas or a sentence</label>
+        <label htmlFor="words" className="font-semibold">Words: lines, commas or a sentence; a Brainscape pack URL alone runs the whole pack</label>
         <textarea
           id="words"
           rows={8}
@@ -107,7 +107,7 @@ export default function HomePage() {
         <p aria-live="polite">No words found in the text.</p>
       )}
       <ul aria-live="polite" className="text-sm space-y-2">
-        {results.map((result) => <ResultLine key={result.word} result={result} />)}
+        {results.map((result, index) => <ResultLine key={index} result={result} />)}
       </ul>
       <SendFooter
         report={sendReport}
@@ -193,7 +193,7 @@ function SendFooter({ report, pendingCount, declinedCount, isPending, onSend, on
 }
 
 function ResultLine({ result }: { result: WordResult }) {
-  const mark = { added: '✓', exists: '–', skipped: '–', error: '!' }[result.status];
+  const mark = { added: '✓', updated: '!', exists: '–', skipped: '–', error: '!' }[result.status];
 
   return (
     <li className="bg-gray-100 p-3 rounded">

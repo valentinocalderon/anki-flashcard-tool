@@ -16,7 +16,7 @@ export const ankiRouter = createTRPCRouter({
     .mutation(async ({ input }): Promise<{ results: WordResult[]; send: SendReport }> => {
       const db = await getDb();
       const client = createAnkiClient(loadConfig().anki.url);
-      const results = await generateForWords(db, input.text, openaiLookup);
+      const results = await generateForWords(db, input.text, openaiLookup, fetch);
       try {
         const send = await sendPending(db, client);
         return { results, send };

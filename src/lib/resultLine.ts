@@ -12,5 +12,10 @@ export function formatResultLine(result: WordResult): string {
   if (result.conjugationCards > 0) {
     parts.push(`${result.conjugationCards} conjugation card${result.conjugationCards === 1 ? '' : 's'}`);
   }
-  return parts.join(' plus ');
+  const added = parts.join(' plus ');
+  if (result.status !== 'updated') return added;
+
+  const warning = 'updated: stored card changed; check Anki if this card was already sent';
+  if (parts.length === 0) return warning;
+  return `${added} added; ${warning}`;
 }
