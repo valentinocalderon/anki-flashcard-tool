@@ -13,16 +13,16 @@ import { cards } from '@/server/db/schema';
 export const ankiRouter = createTRPCRouter({
   generateFromList: publicProcedure
     .input(z.object({ text: z.string().min(1) }))
-    .mutation(async ({ input }): Promise<{ results: WordResult[]; send: SendReport }> => {
+    .mutation(async ({ input }): Promise<{ results: WordResult[]; capReached: boolean; send: SendReport }> => {
       const db = await getDb();
       const client = createAnkiClient(loadConfig().anki.url);
-      const results = await generateForWords(db, input.text, openaiLookup, fetch);
+      const generation = await generateForWords(db, input.text, openaiLookup, fetch);
       try {
         const send = await sendPending(db, client);
-        return { results, send };
+        return { ...generation, send };
       } catch (error) {
         return {
-          results,
+          ...generation,
           send: {
             status: 'failed', sent: 0, rejected: 0,
             pending: await db.$count(cards, and(isNull(cards.sentAt), isNull(cards.declinedAt))),

@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { Db } from '@/server/db';
 import { cards as storedCards, conjugationPatterns } from '@/server/db/schema';
 import type { GeneratedCard } from './cardGenerator';
@@ -54,23 +54,39 @@ async function storeCard(
       }
     }
     const back = allForms.map((form) => form.spanish).join(' / ');
-    if (stored.back === back && JSON.stringify(stored.forms) === JSON.stringify(allForms)) {
+    const unchanged = stored.back === back && JSON.stringify(stored.forms) === JSON.stringify(allForms);
+    if (unchanged && card.audioMp3 == null) {
       return { inserted: [], updatedCards: 0 };
     }
+    const audio = card.audioMp3 != null
+      ? { audioFile: card.audioFile, audioMp3: card.audioMp3 }
+      : stored.back !== back ? { audioFile: null, audioMp3: null } : {};
     const updated = await db.update(storedCards).set({
-      back, forms: allForms, audioFile: card.audioFile, audioMp3: card.audioMp3,
+      ...(unchanged ? {} : { back, forms: allForms }), ...audio,
     })
       .where(eq(storedCards.id, foldedCardId)).returning({ id: storedCards.id });
     if (updated.length === 0) {
       throw new Error(`Card ${foldedCardId} update returned ${updated.length} rows; reload the list and retry.`);
     }
-    return { inserted: [], updatedCards: updated.length };
+    return { inserted: [], updatedCards: unchanged ? 0 : updated.length };
   }
 
   const values = { ...card, forms, wordId, tags: JSON.stringify(card.tags), createdAt: Date.now() };
   const target = [storedCards.deck, storedCards.front];
   const inserted = await db.insert(storedCards).values(values)
     .onConflictDoNothing({ target }).returning({ id: storedCards.id });
+  if (inserted.length === 0 && card.audioMp3 != null) {
+    const stored = await db.select({ id: storedCards.id }).from(storedCards).where(and(
+      eq(storedCards.deck, card.deck), eq(storedCards.front, card.front), isNull(storedCards.audioMp3),
+    )).get();
+    if (stored) {
+      const updated = await db.update(storedCards).set({ audioFile: card.audioFile, audioMp3: card.audioMp3 })
+        .where(eq(storedCards.id, stored.id)).returning({ id: storedCards.id });
+      if (updated.length === 0) {
+        throw new Error(`Card ${stored.id} update returned ${updated.length} rows; reload the list and retry.`);
+      }
+    }
+  }
   return { inserted, updatedCards: 0 };
 }
 

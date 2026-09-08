@@ -24,8 +24,8 @@ const note: AnkiNote = {
 const actions: {
   action: string;
   params: Record<string, unknown>;
-  result: number | (number | null)[] | null;
-  expected: number | (number | null)[] | undefined;
+  result: string | number | (number | null)[] | null;
+  expected: string | number | (number | null)[] | undefined;
   invoke: (client: AnkiClient) => Promise<unknown>;
 }[] = [
   {
@@ -35,6 +35,11 @@ const actions: {
   {
     action: 'addNotes', params: { notes: [note, note] }, result: [456, null], expected: [456, null],
     invoke: (client) => client.addNotes([note, note]),
+  },
+  {
+    action: 'storeMediaFile', params: { filename: 'casa.mp3', data: 'SUQzAP8=' },
+    result: 'casa.mp3', expected: 'casa.mp3',
+    invoke: (client) => client.storeMediaFile('casa.mp3', Buffer.from([73, 68, 51, 0, 255])),
   },
   {
     action: 'sync', params: {}, result: null, expected: undefined,
@@ -59,6 +64,16 @@ test.each(actions)('$action posts a version 6 JSON request and returns its resul
   });
 });
 
+test.each([null, 123, '', { filename: 'casa.mp3' }])(
+  'storeMediaFile rejects an invalid filename result: %j',
+  async (result) => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(Response.json({ result, error: null }));
+
+    await expect(createAnkiClient(url, fetchImpl).storeMediaFile('casa.mp3', Buffer.from([73, 68, 51])))
+      .rejects.toHaveProperty('name', 'ZodError');
+  },
+);
+
 test.each(actions)('$action throws AnkiConnectError with the API error text', async (action) => {
   const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
     Response.json({ result: null, error: 'AnkiConnect action failed' }),
@@ -79,12 +94,15 @@ test('an empty error string still throws AnkiConnectError', async () => {
   await expect(result).rejects.toHaveProperty('message', '');
 });
 
-test.each(actions)('$action reports a rejected fetch as Anki not running', async (action) => {
-  const fetchImpl = vi.fn<typeof fetch>().mockRejectedValueOnce(new TypeError('fetch failed'));
+test.each(actions)('$action tells the user to open Anki after a rejected fetch and preserves its cause', async (action) => {
+  const cause = new TypeError('fetch failed');
+  const fetchImpl = vi.fn<typeof fetch>().mockRejectedValueOnce(cause);
   const result = action.invoke(createAnkiClient(url, fetchImpl));
 
   await expect(result).rejects.toBeInstanceOf(AnkiUnreachableError);
-  await expect(result).rejects.toThrow('Anki is not running');
+  await expect(result).rejects.toHaveProperty('message',
+    'Anki is not running or cannot be reached. Open Anki and try again. AnkiConnect request failed: fetch failed');
+  await expect(result).rejects.toHaveProperty('cause', cause);
 });
 
 test.each(actions)('$action reports a timed out fetch with its cause', async (action) => {
@@ -93,19 +111,30 @@ test.each(actions)('$action reports a timed out fetch with its cause', async (ac
   const result = action.invoke(createAnkiClient(url, fetchImpl));
 
   await expect(result).rejects.toBeInstanceOf(AnkiUnreachableError);
-  await expect(result).rejects.toThrow('Anki did not answer in time');
+  await expect(result).rejects.toHaveProperty('message', 'AnkiConnect request timed out: The operation timed out');
   await expect(result).rejects.toHaveProperty('cause', cause);
 });
 
 test.each(actions)('$action reports a non-JSON body as unreachable with its cause', async (action) => {
-  const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
-    new Response('<html>AnkiConnect is unavailable</html>'),
-  );
+  const cause = new SyntaxError('Unexpected token <');
+  const response = new Response('<html>AnkiConnect is unavailable</html>');
+  vi.spyOn(response, 'json').mockRejectedValueOnce(cause);
+  const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(response);
   const result = action.invoke(createAnkiClient(url, fetchImpl));
 
   await expect(result).rejects.toBeInstanceOf(AnkiUnreachableError);
-  await expect(result).rejects.toThrow('Anki is not running');
-  await expect(result).rejects.toHaveProperty('cause', expect.any(SyntaxError));
+  await expect(result).rejects.toHaveProperty('message', 'AnkiConnect response (HTTP 200) could not be read: Unexpected token <');
+  await expect(result).rejects.toHaveProperty('cause', cause);
+});
+
+test.each(actions)('$action reports a failing HTTP status before decoding the body', async (action) => {
+  const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
+    new Response('unavailable', { status: 503, statusText: 'Service Unavailable' }),
+  );
+  const result = action.invoke(createAnkiClient(url, fetchImpl));
+
+  await expect(result).rejects.toBeInstanceOf(AnkiConnectError);
+  await expect(result).rejects.toHaveProperty('message', 'AnkiConnect returned HTTP 503 Service Unavailable');
 });
 
 test('an unexpected send failure preserves word results and counts only pending cards', async () => {
@@ -131,7 +160,7 @@ test('an unexpected send failure preserves word results and counts only pending 
     vi.doMock('@/server/db', () => ({ getDb: () => Promise.resolve(db) }));
     vi.doMock('@/lib/services/aiLookup', () => ({ openaiLookup: vi.fn() }));
     vi.doMock('@/lib/services/listGenerationService', () => ({
-      generateForWords: vi.fn().mockResolvedValue(results),
+      generateForWords: vi.fn().mockResolvedValue({ results, capReached: true }),
     }));
     vi.doMock('@/lib/services/ankiSender', async (importOriginal) => ({
       ...await importOriginal<typeof AnkiSender>(),
@@ -143,6 +172,7 @@ test('an unexpected send failure preserves word results and counts only pending 
     expect(await caller.pendingCount()).toBe(1);
     expect(await caller.generateFromList({ text: 'casa' })).toEqual({
       results,
+      capReached: true,
       send: {
         status: 'failed', sent: 0, rejected: 0, pending: 1,
         syncedAt: null, message: error.message,

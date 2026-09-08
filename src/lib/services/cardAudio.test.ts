@@ -1,6 +1,8 @@
 import { expect, test } from 'vitest';
+import type { WordInfo } from '@/lib/types';
 import type { cards } from '@/server/db/schema';
 import { cardAudio } from './cardAudio';
+import { conjugationCards, generateCards } from './cardGenerator';
 
 const basic: typeof cards.$inferSelect = {
   id: 41, wordId: 1, deck: 'Spanish::Vocab', kind: 'basic', front: 'house',
@@ -14,7 +16,7 @@ const example: typeof cards.$inferSelect = {
 const conjugation: typeof cards.$inferSelect = {
   ...basic, id: 43, deck: 'Spanish::Conjugation', kind: 'conjugation',
   front: 'Conjugate hablar in present (regular -ar)',
-  back: 'yo: hablo<br>t&uacute;: hablas<br>&eacute;l/ella: habla<br>nosotros: hablamos<br>vosotros: habl&aacute;is<br>ellos: hablan',
+  back: 'yo: hablo<br>tú: hablas<br>él/ella: habla<br>nosotros: hablamos<br>vosotros: habláis<br>ellos: hablan',
 };
 
 test.each([
@@ -43,30 +45,111 @@ test.each([
   expect(cardAudio(card)).toEqual(expected);
 });
 
-test('strips nested and custom tags, quoted attributes and comments without splitting a form', () => {
-  expect(cardAudio({
-    ...conjugation,
-    back: '<div><b>yo</b>: ha<strong title="1 > 0">bl</strong>o</div><!-- no speech > here --><p><voice-word>tú</voice-word>: hablas</p><BR /><span>él/ella</span>: habla',
-  }).text).toBe('yo: hablo tú: hablas él/ella: habla');
+const word: WordInfo = {
+  english: 'house', spanish: 'casa', gender: 'feminine', article: 'la', type: 'noun',
+  example: 'La casa es grande. (The house is big.)', conjugations: null,
+};
+
+test('preserves literal speech for generated basic and example cards', () => {
+  expect(generateCards(word).map((card) => cardAudio(card).text)).toEqual([
+    'la casa', 'casa (house) (The house is big.)',
+  ]);
+  expect(generateCards({
+    ...word, spanish: '¡adiós!', english: 'goodbye', article: null,
+    example: '¡Adiós!, amigo.',
+  }).map((card) => cardAudio(card).text)).toEqual([
+    '¡adiós!', '¡adiós! (goodbye)',
+  ]);
+  expect(generateCards({
+    ...word, spanish: 'tener', english: 'to have', article: null, type: 'verb',
+    example: 'Tengo un pingüino. (I have a penguin.)', exampleWord: 'Tengo',
+  }).map((card) => cardAudio(card).text)).toEqual([
+    'tener', 'Tengo (tener, to have) (I have a penguin.)',
+  ]);
+  expect(generateCards({
+    ...word, spanish: 'oír', english: 'to hear', article: null, type: 'verb',
+    example: 'Oigo música.', exampleWord: 'Oigo',
+  }).map((card) => cardAudio(card).text)).toEqual([
+    'oír', 'Oigo (oír, to hear)',
+  ]);
 });
 
-test('decodes named, decimal, hexadecimal and multi-codepoint HTML entities', () => {
-  expect(cardAudio({
-    ...conjugation,
-    back: 't&uacute;:&nbsp;habl&#225;s<br>&eacute;l: habl&#xF3;<br>&iexcl;yo &amp; ella! &quot;s&iacute;&quot; &apos;no&apos; &lt;3 &gt;2 &euro; &aelig; &NotEqualTilde; &#x1F600;',
-  }).text).toBe('tú: hablás él: habló ¡yo & ella! "sí" \'no\' <3 >2 € æ ≂̸ 😀');
+test('preserves literal speech for generated single and multiple forms', () => {
+  expect(generateCards({ forms: [
+    { spanish: 'la casa', query: 'casa', info: word },
+  ] }).map((card) => cardAudio(card).text)).toEqual([
+    'la casa', 'casa (house) (The house is big.)',
+  ]);
+  expect(generateCards({ forms: [
+    { spanish: '¡adiós!', query: 'adiós', info: { ...word, english: 'goodbye' } },
+    { spanish: '¡chao!', query: 'chao', info: { ...word, english: 'bye' } },
+  ] }).map((card) => cardAudio(card).text)).toEqual(['¡adiós! / ¡chao!']);
 });
 
-test('decodes legacy references without semicolons and leaves literal ampersands intact', () => {
-  expect(cardAudio({
-    ...conjugation, back: 't&uacute: habl&#225s &AMP ella &#Xf3 &notit; &desconocida; &amp;lt; R&D',
-  }).text).toBe('tú: hablás & ella ó ¬it; &desconocida; &lt; R&D');
+test('preserves literal speech for both generated conjugation tenses and pronoun order', () => {
+  const generated = conjugationCards({
+    ...word, spanish: 'hablar', english: 'to speak', article: null, type: 'verb',
+    conjugationClass: { ending: 'ar', present: 'regular', preterite: 'regular' },
+    conjugations: {
+      present: {
+        yo: 'hablo', tú: 'hablas', 'él/ella': 'habla', nosotros: 'hablamos',
+        vosotros: 'habláis', ellos: 'hablan',
+      },
+      preterite: {
+        yo: 'hablé', tú: 'hablaste', 'él/ella': 'habló', nosotros: 'hablamos',
+        vosotros: 'hablasteis', ellos: 'hablaron',
+      },
+    },
+  }, new Set());
+  expect(generated.cards.map((card) => cardAudio(card).text)).toEqual([
+    'yo: hablo tú: hablas él/ella: habla nosotros: hablamos vosotros: habláis ellos: hablan',
+    'yo: hablé tú: hablaste él/ella: habló nosotros: hablamos vosotros: hablasteis ellos: hablaron',
+  ]);
 });
 
-test('uses HTML replacements for invalid and legacy numeric character references', () => {
+test('preserves Unicode bytes and the existing conjugation whitespace normalization', () => {
   expect(cardAudio({
-    ...conjugation, back: 'yo: &#0; &#xD800; &#1114112; &#128; &#x91;sí&#x92;',
-  }).text).toBe('yo: � � � € ‘sí’');
+    ...conjugation, back: ' \tyo: oigo\n<br>tú:\u00a0oyes<br>él/ella: oyó<br>nosotros: oímos<br>vosotros: oi\u0301s<br>ellos: oyen  ',
+  }).text).toBe('yo: oigo tú: oyes él/ella: oyó nosotros: oímos vosotros: oi\u0301s ellos: oyen');
+  expect(cardAudio({
+    ...conjugation, back: '¡ÁÉÍÓÚÜÑ áéíóúüñ! ¿sí? "sí" \'no\' & ella — … 😀',
+  }).text).toBe('¡ÁÉÍÓÚÜÑ áéíóúüñ! ¿sí? "sí" \'no\' & ella — … 😀');
+  expect(cardAudio({ ...conjugation, back: '' }).text).toBe('');
+});
+
+test('rejects entity references with their observed spelling and a named error', () => {
+  expect(() => cardAudio({ ...conjugation, back: 'yo: &desconocida;' })).toThrowError(
+    expect.objectContaining({
+      name: 'CardAudioError',
+      message: 'Unsupported card audio HTML entity "&desconocida;"; check cardGenerator output (expected plain text with <br> separators only).',
+    }),
+  );
+  for (const entity of [
+    '&desconocida;', '&deg;', '&uacute;', '&amp;', '&nbsp;', '&NotEqualTilde;',
+    '&#225;', '&#xF3;', '&#Xf3;', '&#0;', '&#xD800;', '&#1114112;', '&#128;',
+    '&uacute', '&AMP', '&notit;', '&#225', '&#Xf3',
+  ]) {
+    const prepare = () => cardAudio({ ...conjugation, back: `yo: ${entity}` });
+    expect(prepare).toThrowError(expect.objectContaining({ name: 'CardAudioError' }));
+    expect(prepare).toThrowError(entity);
+  }
+});
+
+test('rejects every tag spelling except the generated <br> and reports the observed markup', () => {
+  expect(() => cardAudio({ ...conjugation, back: 'yo: <strong title="1 > 0">hablo</strong>' })).toThrowError(
+    expect.objectContaining({
+      name: 'CardAudioError',
+      message: 'Unsupported card audio HTML tag "<strong title="1 > 0">"; check cardGenerator output (expected plain text with <br> separators only).',
+    }),
+  );
+  for (const tag of [
+    '<div>', '<b>', '</b>', '<voice-word>', '<strong title="1 > 0">',
+    '<!-- no speech > here -->', '<BR>', '<br/>', '<br />', '<br class="break">', '</br>',
+  ]) {
+    const prepare = () => cardAudio({ ...conjugation, back: `yo: hablo${tag}tú: hablas` });
+    expect(prepare).toThrowError(expect.objectContaining({ name: 'CardAudioError' }));
+    expect(prepare).toThrowError(tag);
+  }
 });
 
 test('keeps the same filename when a stored card is enriched or re-sent', () => {

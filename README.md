@@ -4,7 +4,7 @@ Turn pasted words or text into Spanish vocabulary, example-sentence, and conjuga
 
 ## Setup
 
-1. Create a `.env` file in the project root and set `OPENAI_API_KEY` to your OpenAI API key.
+1. Create a `.env` file in the project root and set `OPENAI_API_KEY` to your OpenAI API key. Spanish audio also requires `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` for your ElevenLabs key and Spanish voice.
 2. In Anki desktop, open **Tools → Add-ons → Get Add-ons**, enter code `2055492159` to install AnkiConnect, and restart Anki. Keep Anki open while sending cards.
 3. Install dependencies and start the app:
 
@@ -29,6 +29,8 @@ Migration note: the first pack re-run after the forms migration reports updated 
 - **Spanish::Conjugation**: present and preterite conjugation cards use **Basic**. Shared regular and stem-change patterns are added once; irregular forms get their own cards.
 
 The app creates these decks when needed.
+
+New cards carry ElevenLabs Spanish audio on their Back field, except when the run hits the audio cap or a card's text cannot be prepared for speech (the card is still generated, saved, and sent without audio), or when the voice service fails (the item is reported as failed and its new cards are not saved). A run stops requesting audio at 30000 characters and the page says the audio cap was reached.
 
 ## Sending saved cards
 

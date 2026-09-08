@@ -14,6 +14,16 @@ export type SendReport = {
   message: string | null;
 };
 
+async function storedSendCounts(db: Db, ids: number[]) {
+  const stored = await db.select({ sentAt: cards.sentAt, declinedAt: cards.declinedAt })
+    .from(cards).where(inArray(cards.id, ids));
+  return {
+    sent: stored.filter((card) => card.sentAt !== null).length,
+    rejected: stored.filter((card) => card.sentAt === null && card.declinedAt !== null).length,
+    pending: await db.$count(cards, and(isNull(cards.sentAt), isNull(cards.declinedAt))),
+  };
+}
+
 export async function sendPending(db: Db, client: AnkiClient): Promise<SendReport> {
   const pending = await db.select().from(cards)
     .where(and(isNull(cards.sentAt), isNull(cards.declinedAt))).orderBy(cards.id);
@@ -35,19 +45,21 @@ export async function sendPending(db: Db, client: AnkiClient): Promise<SendRepor
     for (const deck of new Set(pending.map((card) => card.deck))) {
       await client.createDeck(deck);
     }
+    for (const [index, note] of notes.entries()) {
+      const card = pending[index];
+      if (card?.audioFile && card.audioMp3) {
+        const filename = await client.storeMediaFile(card.audioFile, card.audioMp3);
+        note.fields.Back += ` [sound:${filename}]`;
+      }
+    }
     results = await client.addNotes(notes);
   } catch (error) {
-    if (error instanceof AnkiUnreachableError) {
-      return {
-        status: 'anki_closed', sent: 0, rejected: 0, pending: pending.length, syncedAt: null, message: error.message,
-      };
-    }
-    if (error instanceof AnkiConnectError) {
-      return {
-        status: 'failed', sent: 0, rejected: 0, pending: pending.length, syncedAt: null, message: error.message,
-      };
-    }
-    throw error;
+    if (!(error instanceof AnkiUnreachableError) && !(error instanceof AnkiConnectError)) throw error;
+    return {
+      status: error instanceof AnkiUnreachableError ? 'anki_closed' : 'failed',
+      ...await storedSendCounts(db, pending.map((card) => card.id)),
+      syncedAt: null, message: error.message,
+    };
   }
   if (results.length !== pending.length) {
     throw new Error(
@@ -78,7 +90,10 @@ export async function sendPending(db: Db, client: AnkiClient): Promise<SendRepor
     await client.sync();
   } catch (error) {
     if (!(error instanceof AnkiUnreachableError) && !(error instanceof AnkiConnectError)) throw error;
-    return { status: 'sent', sent, rejected, pending: 0, syncedAt: null, message: error.message };
+    return {
+      status: 'sent', ...await storedSendCounts(db, pending.map((card) => card.id)),
+      syncedAt: null, message: error.message,
+    };
   }
 
   return { status: 'sent', sent, rejected, pending: 0, syncedAt: now, message: null };
@@ -113,6 +128,7 @@ export async function retryDeclined(db: Db, client: AnkiClient): Promise<SendRep
   }
   if (report.status === 'anki_closed' || report.status === 'failed') {
     await restoreDeclines();
+    report.pending = await db.$count(cards, and(isNull(cards.sentAt), isNull(cards.declinedAt)));
   }
   return report;
 }

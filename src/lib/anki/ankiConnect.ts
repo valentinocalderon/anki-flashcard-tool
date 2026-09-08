@@ -23,24 +23,38 @@ const responseSchema = z.object({
 
 export function createAnkiClient(url: string, fetchImpl: typeof fetch = fetch) {
   async function invoke<T>(
-    action: 'createDeck' | 'addNotes' | 'sync',
+    action: 'createDeck' | 'storeMediaFile' | 'addNotes' | 'sync',
     params: Record<string, unknown>,
     resultSchema: z.ZodType<T>
   ): Promise<T> {
-    let responseBody: unknown;
+    let response: Response;
     try {
-      const response = await fetchImpl(url, {
+      response = await fetchImpl(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action, version: 6, params }),
         signal: AbortSignal.timeout(15000),
       });
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      if (typeof cause === 'object' && cause !== null && 'name' in cause && cause.name === 'TimeoutError') {
+        throw new AnkiUnreachableError(`AnkiConnect request timed out: ${message}`, { cause });
+      }
+      throw new AnkiUnreachableError(
+        `Anki is not running or cannot be reached. Open Anki and try again. AnkiConnect request failed: ${message}`,
+        { cause },
+      );
+    }
+    if (!response.ok) {
+      throw new AnkiConnectError(`AnkiConnect returned HTTP ${response.status} ${response.statusText}`);
+    }
+
+    let responseBody: unknown;
+    try {
       responseBody = await response.json();
     } catch (cause) {
-      if (typeof cause === 'object' && cause !== null && 'name' in cause && cause.name === 'TimeoutError') {
-        throw new AnkiUnreachableError('Anki did not answer in time', { cause });
-      }
-      throw new AnkiUnreachableError('Anki is not running', { cause });
+      const message = cause instanceof Error ? cause.message : String(cause);
+      throw new AnkiUnreachableError(`AnkiConnect response (HTTP ${response.status}) could not be read: ${message}`, { cause });
     }
 
     const payload = responseSchema.parse(responseBody);
@@ -51,6 +65,9 @@ export function createAnkiClient(url: string, fetchImpl: typeof fetch = fetch) {
   return {
     createDeck(name: string): Promise<number> {
       return invoke('createDeck', { deck: name }, z.number());
+    },
+    storeMediaFile(filename: string, audioMp3: Uint8Array): Promise<string> {
+      return invoke('storeMediaFile', { filename, data: Buffer.from(audioMp3).toString('base64') }, z.string().min(1));
     },
     addNotes(notes: AnkiNote[]): Promise<(number | null)[]> {
       return invoke('addNotes', { notes }, z.array(z.number().nullable()));

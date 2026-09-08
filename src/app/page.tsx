@@ -106,6 +106,9 @@ export default function HomePage() {
       {generation.isSuccess && results.length === 0 && (
         <p aria-live="polite">No words found in the text.</p>
       )}
+      {generation.data?.capReached && (
+        <p aria-live="polite" className="text-sm mb-3">Audio cap reached for this run.</p>
+      )}
       <ul aria-live="polite" className="text-sm space-y-2">
         {results.map((result, index) => <ResultLine key={index} result={result} />)}
       </ul>

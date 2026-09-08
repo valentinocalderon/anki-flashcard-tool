@@ -1,15 +1,18 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import OpenAI from 'openai';
 import { env } from '@/env';
+import { loadConfig } from '@/lib/config';
 import type { WordInfo, WordResult } from '@/lib/types';
 import type { Db } from '@/server/db';
 import { cards, words } from '@/server/db/schema';
 import { askForJson } from './aiLookup';
 import { fetchPack, isPackUrl } from './brainscapePack';
 import { spanishSideItems, type BrainscapeItem } from './brainscapeSides';
-import { conjugationCards, generateCards, type LookedUpItem } from './cardGenerator';
+import { cardAudio } from './cardAudio';
+import { conjugationCards, generateCards, type GeneratedCard, type LookedUpItem } from './cardGenerator';
 import { cardedPatternKeys, storeCards } from './cardStore';
 import { cachedLookup, normalizeQuery } from './lookupCache';
+import { createSpanishVoice } from './spanishVoice';
 import type { AskForJson } from './wordListExtractor';
 import { resolveWordList } from './wordListParser';
 
@@ -60,10 +63,44 @@ async function inputItems(
   return items;
 }
 
+async function voiceCard(
+  db: Db,
+  card: GeneratedCard,
+  voice: ReturnType<typeof createSpanishVoice>,
+  foldedCardId: number | undefined,
+): Promise<Parameters<typeof storeCards>[2][number]> {
+  const folding = foldedCardId !== undefined && card.kind === 'basic' && card.forms && card.forms.length > 1;
+  const stored = await db.select().from(cards).where(folding
+    ? eq(cards.id, foldedCardId)
+    : and(eq(cards.deck, card.deck), eq(cards.front, card.front))).get();
+  let spokenCard = stored ?? card;
+  if (folding && stored && card.forms) {
+    const forms = [...card.forms];
+    for (const form of stored.forms ?? []) {
+      if (!forms.some((current) => normalizeQuery(current.query) === normalizeQuery(form.query))) {
+        forms.push(form);
+      }
+    }
+    spokenCard = { ...stored, back: forms.map((form) => form.spanish).join(' / ') };
+  }
+  if (stored?.audioMp3 != null && stored.back === spokenCard.back) return card;
+
+  let audio: ReturnType<typeof cardAudio>;
+  try {
+    audio = cardAudio(spokenCard);
+  } catch (error) {
+    if (error instanceof Error && error.name === 'CardAudioError') return card;
+    throw error;
+  }
+  const bytes = await voice.synthesize(audio.text);
+  return bytes === undefined ? card : { ...card, audioFile: audio.audioFile, audioMp3: Buffer.from(bytes) };
+}
+
 async function generateItem(
   db: Db,
   item: BrainscapeItem,
   lookup: (word: string) => Promise<WordInfo>,
+  voice: ReturnType<typeof createSpanishVoice>,
 ): Promise<WordResult> {
   const word = item.forms.map((form) => form.spanish).join(' / ');
   const storedWords = await db.select({
@@ -107,11 +144,12 @@ async function generateItem(
   }
 
   const conjugations = conjugationCards(first.info, await cardedPatternKeys(db));
+  const voicedCards: Parameters<typeof storeCards>[2][number][] = [];
+  for (const card of [...generateCards(lookedUp.forms.length === 1 ? first.info : lookedUp), ...conjugations.cards]) {
+    voicedCards.push(await voiceCard(db, card, voice, foldedCardId));
+  }
   const { vocabCards, conjugationCards: insertedConjugations, updatedCards } = await storeCards(
-    db, wordId,
-    [...generateCards(lookedUp.forms.length === 1 ? first.info : lookedUp), ...conjugations.cards],
-    conjugations.claims,
-    foldedCardId,
+    db, wordId, voicedCards, conjugations.claims, foldedCardId,
   );
   const counts = { vocabCards, conjugationCards: insertedConjugations };
   if (updatedCards > 0) return { word, status: 'updated', ...counts };
@@ -124,7 +162,8 @@ export async function generateForWords(
   text: string,
   lookup: (word: string) => Promise<WordInfo>,
   fetchImpl: typeof fetch,
-): Promise<WordResult[]> {
+): Promise<{ results: WordResult[]; capReached: boolean }> {
+  const voice = createSpanishVoice(loadConfig().audio, fetchImpl);
   const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
   const ask: AskForJson = (prompt, schema) => askForJson(prompt, schema, client);
   const results: WordResult[] = [];
@@ -132,11 +171,11 @@ export async function generateForWords(
 
   for (const item of items) {
     try {
-      results.push(await generateItem(db, item, lookup));
+      results.push(await generateItem(db, item, lookup, voice));
     } catch (error) {
       results.push(errorResult(item.forms.map((form) => form.spanish).join(' / '), error));
     }
   }
 
-  return results;
+  return { results, capReached: voice.capReached };
 }
