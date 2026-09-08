@@ -175,7 +175,7 @@ test.each(['Casa', 'Casa / CASA'])(
       },
       {
         deck: 'Spanish::Vocab', kind: 'example', front: 'La ____ es grande.',
-        back: 'casa (house) (The house is big.)', tags: ['auto-generated'],
+        back: 'casa (house)<br>(The house is big.)', tags: ['auto-generated'],
       },
     ]);
   },
@@ -268,7 +268,7 @@ test('a noun produces only a basic card and its blanked example in the vocab dec
     },
     {
       deck: 'Spanish::Vocab', kind: 'example', front: 'La ____ es grande.',
-      back: 'casa (house) (The house is big.)', tags: ['auto-generated'],
+      back: 'casa (house)<br>(The house is big.)', tags: ['auto-generated'],
     },
   ]);
   expect(conjugationCards(noun, new Set())).toEqual({ cards: [], claims: [] });
@@ -296,19 +296,22 @@ test('blanks every case-insensitive match and supports an example without a tran
 test('an example form matching spanish ignoring case uses spanish and its translation', () => {
   expect(generateCards({ ...noun, exampleWord: 'CASA' })[1]).toEqual({
     deck: 'Spanish::Vocab', kind: 'example', front: 'La ____ es grande.',
-    back: 'casa (house) (The house is big.)', tags: ['auto-generated'],
+    back: 'casa (house)<br>(The house is big.)', tags: ['auto-generated'],
   });
 });
 
-test.each([' (I have a dog.)', ''])(
-  'a verb example blanks the conjugated form supplied as exampleWord with translation %j',
-  (translation) => {
+test.each([
+  { translation: ' (I have a dog.)', back: 'Tengo (tener, to have)<br>(I have a dog.)' },
+  { translation: '', back: 'Tengo (tener, to have)' },
+])(
+  'a verb example blanks the conjugated form supplied as exampleWord with translation $translation',
+  ({ translation, back }) => {
     expect(generateCards({
       ...noun, english: 'to have', spanish: 'tener', gender: null, article: null, type: 'verb',
       example: `Tengo un perro.${translation}`, exampleWord: 'Tengo',
     })[1]).toEqual({
       deck: 'Spanish::Vocab', kind: 'example', front: '____ un perro.',
-      back: `Tengo (tener, to have)${translation}`, tags: ['auto-generated'],
+      back, tags: ['auto-generated'],
     });
   },
 );
@@ -319,14 +322,14 @@ test('a padded exampleWord is trimmed for blanking and the example back', () => 
     example: 'Tengo un perro. (I have a dog.)', exampleWord: '  Tengo  ',
   })[1]).toEqual({
     deck: 'Spanish::Vocab', kind: 'example', front: '____ un perro.',
-    back: 'Tengo (tener, to have) (I have a dog.)', tags: ['auto-generated'],
+    back: 'Tengo (tener, to have)<br>(I have a dog.)', tags: ['auto-generated'],
   });
 });
 
 test('an empty exampleWord falls back to spanish for blanking and the example back', () => {
   expect(generateCards({ ...noun, exampleWord: '' })[1]).toEqual({
     deck: 'Spanish::Vocab', kind: 'example', front: 'La ____ es grande.',
-    back: 'casa (house) (The house is big.)', tags: ['auto-generated'],
+    back: 'casa (house)<br>(The house is big.)', tags: ['auto-generated'],
   });
 });
 
@@ -347,7 +350,7 @@ test('an accented noun gets its example card with case-insensitive Unicode match
     },
     {
       deck: 'Spanish::Vocab', kind: 'example', front: 'El ____ es alto.',
-      back: 'árbol (tree) (The tree is tall.)', tags: ['auto-generated'],
+      back: 'árbol (tree)<br>(The tree is tall.)', tags: ['auto-generated'],
     },
   ]);
 });
@@ -359,7 +362,7 @@ test.each(['a+b', 'a.b', '[', 'c++', '\\'])(
       ...noun, spanish, example: `Uso ${spanish} aquí. (I use it here.)`,
     })[1]).toEqual({
       deck: 'Spanish::Vocab', kind: 'example', front: 'Uso ____ aquí.',
-      back: `${spanish} (house) (I use it here.)`, tags: ['auto-generated'],
+      back: `${spanish} (house)<br>(I use it here.)`, tags: ['auto-generated'],
     });
   },
 );

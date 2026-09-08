@@ -122,25 +122,39 @@ test('pushes cached audio in id order without speech and excludes rows missing s
   expect(await db.select().from(cards).where(inArray(cards.id, [30, 40, 50])).orderBy(cards.id)).toEqual(excluded);
 });
 
-test('speaks plain conjugation text while pushing the stored HTML Back', async () => {
-  await db.insert(cards).values({
-    ...storedHouse, kind: 'conjugation', deck: 'Spanish::Conjugation',
+test.each([
+  {
+    kind: 'conjugation' as const, deck: 'Spanish::Conjugation',
     front: 'Conjugate hablar in present (regular -ar)', back: 'yo: hablo<br>tú: hablas',
+    text: 'yo: hablo tú: hablas',
+    filename: 'card-c601592f902a214434a7a704ad2f32fbbe719057a47ea3c26506cc66eb97ccf1.mp3',
+    pushedBack: 'yo: hablo<br>tú: hablas [sound:stored.mp3]',
+  },
+  {
+    kind: 'example' as const, deck: 'Spanish::Vocab',
+    front: 'La ____ es grande.', back: 'casa (house)<br>(The house is big.)',
+    text: 'casa',
+    filename: 'card-4c344c79b718a77c9b2bf1afebdd12740e1959784d43c22a867bbcb85d9e74bb.mp3',
+    pushedBack: 'casa (house)<br>(The house is big.) [sound:stored.mp3]',
+  },
+])('speaks Spanish-only $kind text while pushing the stored HTML Back', async ({ kind, deck, front, back, text, filename, pushedBack }) => {
+  await db.insert(cards).values({
+    ...storedHouse, kind, deck, front, back,
   });
   const voiceFetch = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(new Uint8Array([73])));
   const ankiFetch = vi.fn<typeof fetch>()
-    .mockResolvedValueOnce(Response.json({ result: 'conjugation.mp3', error: null }))
+    .mockResolvedValueOnce(Response.json({ result: 'stored.mp3', error: null }))
     .mockResolvedValueOnce(Response.json({ result: null, error: null }));
 
   expect(await backfillSentAudio(db, createAnkiClient(url, ankiFetch), createSpanishVoice(loadConfig().audio, voiceFetch)))
     .toEqual({ status: 'sent', sent: 1, rejected: 0, pending: 0, syncedAt: null, message: null });
-  expect(requestBody(voiceFetch.mock.calls[0]?.[1])).toEqual({ text: 'yo: hablo tú: hablas', model_id: 'eleven_multilingual_v2' });
+  expect(requestBody(voiceFetch.mock.calls[0]?.[1])).toEqual({ text, model_id: 'eleven_multilingual_v2' });
   expect(ankiFetch.mock.calls.map(([, init]) => requestBody(init))).toEqual([
     { action: 'storeMediaFile', version: 6, params: {
-      filename: 'card-c601592f902a214434a7a704ad2f32fbbe719057a47ea3c26506cc66eb97ccf1.mp3', data: 'SQ==',
+      filename, data: 'SQ==',
     } },
     { action: 'updateNoteFields', version: 6, params: { note: {
-      id: 101, fields: { Back: 'yo: hablo<br>tú: hablas [sound:conjugation.mp3]' },
+      id: 101, fields: { Back: pushedBack },
     } } },
   ]);
 });
@@ -638,7 +652,7 @@ test('voices and pushes a sent fold whose changed Back cleared old audio after c
 
   expect(await backfillSentAudio(db, createAnkiClient(url, ankiFetch), createSpanishVoice(loadConfig().audio, voiceFetch)))
     .toEqual({ status: 'sent', sent: 1, rejected: 0, pending: 0, syncedAt: null, message: null });
-  expect(requestBody(voiceFetch.mock.calls[0]?.[1])).toEqual({ text: 'la casa / el hogar', model_id: 'eleven_multilingual_v2' });
+  expect(requestBody(voiceFetch.mock.calls[0]?.[1])).toEqual({ text: 'la casa el hogar', model_id: 'eleven_multilingual_v2' });
   expect(ankiFetch.mock.calls.map(([, init]) => requestBody(init))).toEqual([
     { action: 'storeMediaFile', version: 6, params: { filename: audioFile, data: 'SUQ=' } },
     { action: 'updateNoteFields', version: 6, params: { note: { id: 101, fields: {

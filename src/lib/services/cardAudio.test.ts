@@ -6,12 +6,16 @@ import { conjugationCards, generateCards } from './cardGenerator';
 
 const basic: typeof cards.$inferSelect = {
   id: 41, wordId: 1, deck: 'Spanish::Vocab', kind: 'basic', front: 'house',
-  back: '  la <b>casa</b> &amp; el hogar\n', tags: '["vocab"]', forms: null,
+  back: 'la casa', tags: '["vocab"]', forms: null,
   audioFile: null, audioMp3: null, audioSentAt: null, ankiNoteId: null, sentAt: null, declinedAt: null, createdAt: 123,
 };
 const example: typeof cards.$inferSelect = {
   ...basic, id: 42, kind: 'example', front: 'La ____ es grande.',
-  back: 'casa (house) (The <em>house</em> is big &amp; bright.)  ',
+  back: 'casa (house)<br>(The house is big.)',
+};
+const folded: typeof cards.$inferSelect = {
+  ...basic, id: 44, back: 'casa / hogar',
+  forms: [{ spanish: 'casa', query: 'casa' }, { spanish: 'hogar', query: 'hogar' }],
 };
 const conjugation: typeof cards.$inferSelect = {
   ...basic, id: 43, deck: 'Spanish::Conjugation', kind: 'conjugation',
@@ -23,15 +27,22 @@ test.each([
   {
     card: basic,
     expected: {
-      text: '  la <b>casa</b> &amp; el hogar\n',
+      text: 'la casa',
       audioFile: 'card-39ea127757ece19e4f940e03a400b6cc3fae452580ca79223e0d6b75148a5477.mp3',
     },
   },
   {
     card: example,
     expected: {
-      text: 'casa (house) (The <em>house</em> is big &amp; bright.)  ',
+      text: 'casa',
       audioFile: 'card-4c344c79b718a77c9b2bf1afebdd12740e1959784d43c22a867bbcb85d9e74bb.mp3',
+    },
+  },
+  {
+    card: folded,
+    expected: {
+      text: 'casa hogar',
+      audioFile: 'card-39ea127757ece19e4f940e03a400b6cc3fae452580ca79223e0d6b75148a5477.mp3',
     },
   },
   {
@@ -50,40 +61,48 @@ const word: WordInfo = {
   example: 'La casa es grande. (The house is big.)', conjugations: null,
 };
 
-test('preserves literal speech for generated basic and example cards', () => {
+test('speaks only Spanish for generated basic and example cards', () => {
   expect(generateCards(word).map((card) => cardAudio(card).text)).toEqual([
-    'la casa', 'casa (house) (The house is big.)',
+    'la casa', 'casa',
   ]);
   expect(generateCards({
     ...word, spanish: '¡adiós!', english: 'goodbye', article: null,
     example: '¡Adiós!, amigo.',
   }).map((card) => cardAudio(card).text)).toEqual([
-    '¡adiós!', '¡adiós! (goodbye)',
+    '¡adiós!', '¡adiós!',
   ]);
   expect(generateCards({
     ...word, spanish: 'tener', english: 'to have', article: null, type: 'verb',
     example: 'Tengo un pingüino. (I have a penguin.)', exampleWord: 'Tengo',
   }).map((card) => cardAudio(card).text)).toEqual([
-    'tener', 'Tengo (tener, to have) (I have a penguin.)',
+    'tener', 'Tengo',
   ]);
   expect(generateCards({
     ...word, spanish: 'oír', english: 'to hear', article: null, type: 'verb',
     example: 'Oigo música.', exampleWord: 'Oigo',
   }).map((card) => cardAudio(card).text)).toEqual([
-    'oír', 'Oigo (oír, to hear)',
+    'oír', 'Oigo',
   ]);
 });
 
-test('preserves literal speech for generated single and multiple forms', () => {
+test('speaks only Spanish for generated single and multiple forms', () => {
   expect(generateCards({ forms: [
     { spanish: 'la casa', query: 'casa', info: word },
   ] }).map((card) => cardAudio(card).text)).toEqual([
-    'la casa', 'casa (house) (The house is big.)',
+    'la casa', 'casa',
   ]);
   expect(generateCards({ forms: [
     { spanish: '¡adiós!', query: 'adiós', info: { ...word, english: 'goodbye' } },
     { spanish: '¡chao!', query: 'chao', info: { ...word, english: 'bye' } },
-  ] }).map((card) => cardAudio(card).text)).toEqual(['¡adiós! / ¡chao!']);
+  ] }).map((card) => cardAudio(card).text)).toEqual(['¡adiós! ¡chao!']);
+});
+
+test.each([basic, example, folded, conjugation])('cleans HTML, every parenthetical and folded separators before normalizing $kind speech', (card) => {
+  expect(cardAudio({
+    ...card, back: ' \tcasa (house)\n<br>(The house\nis big.)\t /\u00a0hogar (home)<br>/ vivienda (dwelling)  ',
+  }).text).toBe('casa hogar vivienda');
+  expect(cardAudio({ ...card, back: 'casa (house) (The house is big.)' }).text).toBe('casa');
+  expect(cardAudio({ ...card, back: 'casa (house)<br>(The house is big' }).text).toBe('casa');
 });
 
 test('preserves literal speech for both generated conjugation tenses and pronoun order', () => {
@@ -117,8 +136,8 @@ test('preserves Unicode bytes and the existing conjugation whitespace normalizat
   expect(cardAudio({ ...conjugation, back: '' }).text).toBe('');
 });
 
-test('rejects entity references with their observed spelling and a named error', () => {
-  expect(() => cardAudio({ ...conjugation, back: 'yo: &desconocida;' })).toThrowError(
+test.each([basic, example, folded, conjugation])('rejects entity references in $kind speech with their observed spelling and a named error', (card) => {
+  expect(() => cardAudio({ ...card, back: 'yo: &desconocida;' })).toThrowError(
     expect.objectContaining({
       name: 'CardAudioError',
       message: 'Unsupported card audio HTML entity "&desconocida;"; check cardGenerator output (expected plain text with <br> separators only).',
@@ -129,14 +148,14 @@ test('rejects entity references with their observed spelling and a named error',
     '&#225;', '&#xF3;', '&#Xf3;', '&#0;', '&#xD800;', '&#1114112;', '&#128;',
     '&uacute', '&AMP', '&notit;', '&#225', '&#Xf3',
   ]) {
-    const prepare = () => cardAudio({ ...conjugation, back: `yo: ${entity}` });
+    const prepare = () => cardAudio({ ...card, back: `yo: ${entity}` });
     expect(prepare).toThrowError(expect.objectContaining({ name: 'CardAudioError' }));
     expect(prepare).toThrowError(entity);
   }
 });
 
-test('rejects every tag spelling except the generated <br> and reports the observed markup', () => {
-  expect(() => cardAudio({ ...conjugation, back: 'yo: <strong title="1 > 0">hablo</strong>' })).toThrowError(
+test.each([basic, example, folded, conjugation])('rejects every tag spelling except the generated <br> in $kind speech and reports the observed markup', (card) => {
+  expect(() => cardAudio({ ...card, back: 'yo: <strong title="1 > 0">hablo</strong>' })).toThrowError(
     expect.objectContaining({
       name: 'CardAudioError',
       message: 'Unsupported card audio HTML tag "<strong title="1 > 0">"; check cardGenerator output (expected plain text with <br> separators only).',
@@ -146,10 +165,25 @@ test('rejects every tag spelling except the generated <br> and reports the obser
     '<div>', '<b>', '</b>', '<voice-word>', '<strong title="1 > 0">',
     '<!-- no speech > here -->', '<BR>', '<br/>', '<br />', '<br class="break">', '</br>',
   ]) {
-    const prepare = () => cardAudio({ ...conjugation, back: `yo: hablo${tag}tú: hablas` });
+    const prepare = () => cardAudio({ ...card, back: `yo: hablo${tag}tú: hablas` });
     expect(prepare).toThrowError(expect.objectContaining({ name: 'CardAudioError' }));
     expect(prepare).toThrowError(tag);
   }
+});
+
+test.each([basic, example, folded, conjugation])('validates HTML before removing parentheticals in $kind speech', (card) => {
+  expect(() => cardAudio({ ...card, back: 'casa (house)<br>(The <em>house</em> is big.)' })).toThrowError(
+    expect.objectContaining({
+      name: 'CardAudioError',
+      message: 'Unsupported card audio HTML tag "<em>"; check cardGenerator output (expected plain text with <br> separators only).',
+    }),
+  );
+  expect(() => cardAudio({ ...card, back: 'casa (house)<br>(The house is big &amp; bright.)' })).toThrowError(
+    expect.objectContaining({
+      name: 'CardAudioError',
+      message: 'Unsupported card audio HTML entity "&amp;"; check cardGenerator output (expected plain text with <br> separators only).',
+    }),
+  );
 });
 
 test('keeps the same filename when a stored card is enriched or re-sent', () => {

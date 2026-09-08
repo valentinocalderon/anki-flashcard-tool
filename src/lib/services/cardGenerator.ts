@@ -46,7 +46,7 @@ export function generateCards(wordInfo: WordInfo | LookedUpItem): GeneratedCard[
         deck: config.decks.vocab,
         kind: 'example',
         front: blanked,
-        back: `${answer}${englishPart ? ` ${englishPart}` : ''}`,
+        back: `${answer}${englishPart ? `<br>${englishPart}` : ''}`,
         tags,
       });
     }

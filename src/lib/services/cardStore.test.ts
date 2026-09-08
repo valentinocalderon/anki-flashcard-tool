@@ -11,7 +11,7 @@ const basic: GeneratedCard = {
 };
 const example: GeneratedCard = {
   deck: 'Spanish::Vocab', kind: 'example', front: 'La ____ es grande.',
-  back: 'casa (house) (The house is big.)', tags: ['auto-generated'],
+  back: 'casa (house)<br>(The house is big.)', tags: ['auto-generated'],
 };
 const present: GeneratedCard = {
   deck: 'Spanish::Conjugation', kind: 'conjugation',
