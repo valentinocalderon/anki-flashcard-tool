@@ -139,45 +139,35 @@ export function isPackSetUrl(text: string): boolean {
     && /^\/p\/[a-zA-Z\d-]+\/?$/.test(url.pathname);
 }
 
-export async function fetchPack(url: string, fetchImpl: typeof fetch): Promise<string[]> {
-  const packUrl = new URL(url);
-  const packId = /\/packs\/(\d+)\/?$/.exec(packUrl.pathname)?.[1];
-  if (!packId) {
-    throw new Error(`Brainscape URL ${url} has no /packs/DIGITS path; use a public pack URL.`);
-  }
-  const readPage = async (pageUrl: string) => {
-    const signal = AbortSignal.timeout(15000);
-    try {
-      const response = await fetchImpl(pageUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-        },
-        signal,
-      });
-      if (!response.ok) {
-        throw new Error(`Brainscape request for ${pageUrl} returned HTTP ${response.status} ${response.statusText}; check the response and retry.`);
-      }
-      return await response.text();
-    } catch (cause) {
-      if (signal.aborted) {
-        throw new Error(`Brainscape request for ${pageUrl} did not answer in time`, { cause });
-      }
-      throw cause;
+async function readPage(pageUrl: string, fetchImpl: typeof fetch): Promise<string> {
+  const signal = AbortSignal.timeout(15000);
+  try {
+    const response = await fetchImpl(pageUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      },
+      signal,
+    });
+    if (!response.ok) {
+      throw new Error(`Brainscape request for ${pageUrl} returned HTTP ${response.status} ${response.statusText}; check the response and retry.`);
     }
-  };
-
-  const html = await readPage(packUrl.href);
-  const links = deckLinks(html, packId);
-  if (links.length === 0) {
-    throw new Error(`Brainscape page ${packUrl.href} contained ${links.length} deck links for pack ${packId}; check the page HTML.`);
+    return await response.text();
+  } catch (cause) {
+    if (signal.aborted) {
+      throw new Error(`Brainscape request for ${pageUrl} did not answer in time`, { cause });
+    }
+    throw cause;
   }
+}
+
+async function fetchDecks(links: string[], pageUrl: URL, fetchImpl: typeof fetch, firstHtml?: string): Promise<string[]> {
   const sides: string[] = [];
   for (const link of links) {
-    const deckUrl = new URL(link, packUrl).href;
-    let deckHtml = html;
-    if (deckUrl !== packUrl.href) {
+    const deckUrl = new URL(link, pageUrl).href;
+    let deckHtml = firstHtml;
+    if (deckUrl !== pageUrl.href || deckHtml === undefined) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
-      deckHtml = await readPage(deckUrl);
+      deckHtml = await readPage(deckUrl, fetchImpl);
     }
     const deckSides = spanishSides(deckHtml);
     if (deckSides.length === 0) {
@@ -186,4 +176,24 @@ export async function fetchPack(url: string, fetchImpl: typeof fetch): Promise<s
     sides.push(...deckSides);
   }
   return sides;
+}
+
+export async function fetchPack(url: string, fetchImpl: typeof fetch): Promise<string[]> {
+  const packUrl = new URL(url);
+  const packId = /\/packs\/(\d+)\/?$/.exec(packUrl.pathname)?.[1];
+  if (!packId) {
+    throw new Error(`Brainscape URL ${url} has no /packs/DIGITS path; use a public pack URL.`);
+  }
+  const html = await readPage(packUrl.href, fetchImpl);
+  const links = deckLinks(html, packId);
+  if (links.length === 0) {
+    throw new Error(`Brainscape page ${packUrl.href} contained ${links.length} deck links for pack ${packId}; check the page HTML.`);
+  }
+  return fetchDecks(links, packUrl, fetchImpl, html);
+}
+
+export async function fetchPackSet(url: string, fetchImpl: typeof fetch): Promise<string[]> {
+  const packSetUrl = new URL(url);
+  const html = await readPage(packSetUrl.href, fetchImpl);
+  return fetchDecks(packSetLinks(html), packSetUrl, fetchImpl);
 }

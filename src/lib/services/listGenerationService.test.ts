@@ -92,8 +92,10 @@ const irregularVerb: WordInfo = {
 };
 
 const packUrl = 'https://www.brainscape.com/packs/21648778';
+const packSetUrl = 'https://www.brainscape.com/p/5M6OW-LH-D10NR';
 const singleDeckUrl = 'https://www.brainscape.com/flashcards/test/packs/42';
 const pack = readFileSync(new URL('./__fixtures__/brainscape/pack.html', import.meta.url), 'utf8');
+const packSet = readFileSync(new URL('./__fixtures__/brainscape/packset.html', import.meta.url), 'utf8');
 const greetings = readFileSync(new URL('./__fixtures__/brainscape/deck-common-greetings.html', import.meta.url), 'utf8');
 const nouns = readFileSync(new URL('./__fixtures__/brainscape/deck-nouns-articles.html', import.meta.url), 'utf8');
 const packWords = [
@@ -134,6 +136,11 @@ function serveSides(sides: readonly string[]) {
     </div>`,
   ).join('');
   fetchImpl.mockResolvedValueOnce(new Response(html));
+}
+
+function servePackSet(sides: readonly string[]) {
+  fetchImpl.mockResolvedValueOnce(new Response(packSet));
+  for (const side of sides) serveSides([side]);
 }
 
 function pageWithResults(results: WordResult[], capReached = false) {
@@ -263,6 +270,155 @@ test.each([
     wordId: 2, kind: 'basic', front: '¡Adiós! / ¡Chao!', back: '¡Adiós! / ¡Chao!',
   });
   expect(vi.getTimerCount()).toBe(0);
+});
+
+test.each([packSetUrl, `${packSetUrl}/`])('routes a lone pack-set URL through the saved decks and shared item path: %s', async (url) => {
+  vi.useFakeTimers();
+  fetchImpl.mockResolvedValueOnce(new Response(packSet)).mockResolvedValueOnce(new Response(greetings));
+  for (let deck = 0; deck < 15; deck += 1) fetchImpl.mockResolvedValueOnce(new Response(nouns));
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>().mockImplementation(async (word) => ({
+    ...noun, spanish: word, english: word, article: null, example: null,
+  }));
+  const parseList = vi.spyOn(wordListParser, 'resolveWordList');
+
+  const run = generateForWords(db, ` \n${url}\t `, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+  await vi.runAllTimersAsync();
+
+  expect((await run).results).toEqual(packWords.map((word) => ({ word, status: 'added', vocabCards: 1, conjugationCards: 0 })));
+  expect(lookup.mock.calls.flat()).toEqual(packForms);
+  expect(fetchImpl).toHaveBeenCalledTimes(54);
+  expect(fetchImpl).toHaveBeenNthCalledWith(1, url, expect.any(Object));
+  expect(parseList).not.toHaveBeenCalled();
+  expect(await db.select().from(cards)).toHaveLength(37);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test('a pack-set reports one result per item in deck order after silently dropping a duplicate from a second deck', async () => {
+  vi.useFakeTimers();
+  servePackSet([
+    'casa', 'CASA', 'árbol', 'perro', 'gato', 'libro', 'mesa', 'silla',
+    'puerta', 'ventana', 'agua', 'pan', 'leche', 'calle', 'ciudad', 'sol',
+  ]);
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>().mockImplementation(async (word) => ({
+    ...noun, spanish: word, english: word, article: null, example: null,
+  }));
+
+  const run = generateForWords(db, packSetUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+  await vi.runAllTimersAsync();
+  const { results } = await run;
+
+  expect(lookup.mock.calls.flat()).toEqual([
+    'casa', 'árbol', 'perro', 'gato', 'libro', 'mesa', 'silla',
+    'puerta', 'ventana', 'agua', 'pan', 'leche', 'calle', 'ciudad', 'sol',
+  ]);
+  expect(await db.select({ front: cards.front }).from(cards).where(eq(cards.front, 'casa'))).toEqual([{ front: 'casa' }]);
+  expect(results).toEqual([
+    { word: 'casa', status: 'added', vocabCards: 1, conjugationCards: 0 },
+    ...['árbol', 'perro', 'gato', 'libro', 'mesa', 'silla', 'puerta', 'ventana', 'agua', 'pan', 'leche', 'calle', 'ciudad', 'sol']
+      .map((word) => ({ word, status: 'added', vocabCards: 1, conjugationCards: 0 })),
+  ]);
+  expect(results).toHaveLength(15);
+  const html = renderToStaticMarkup(pageWithResults(results));
+  expect(html.match(/<li\b/g)).toHaveLength(15);
+  expect(html).not.toContain('<strong>CASA</strong>');
+});
+
+test('a pack-set skips a word already carded by an earlier run without lookup and keeps its place in deck order', async () => {
+  vi.useFakeTimers();
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>().mockImplementation(async (word) => ({
+    ...noun, spanish: word, english: word, article: null, example: null,
+  }));
+  expect((await generateForWords(db, 'casa', lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results).toEqual([
+    { word: 'casa', status: 'added', vocabCards: 1, conjugationCards: 0 },
+  ]);
+  expect(lookup).toHaveBeenCalledExactlyOnceWith('casa');
+  expect(await db.select({ front: cards.front }).from(cards)).toEqual([{ front: 'casa' }]);
+  lookup.mockClear();
+  servePackSet([
+    'árbol', 'CASA', 'perro', 'gato', 'libro', 'mesa', 'silla', 'puerta',
+    'ventana', 'agua', 'pan', 'leche', 'calle', 'ciudad', 'playa', 'sol',
+  ]);
+
+  const run = generateForWords(db, packSetUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+  await vi.runAllTimersAsync();
+  const { results } = await run;
+
+  expect(lookup.mock.calls.flat()).toEqual([
+    'árbol', 'perro', 'gato', 'libro', 'mesa', 'silla', 'puerta',
+    'ventana', 'agua', 'pan', 'leche', 'calle', 'ciudad', 'playa', 'sol',
+  ]);
+  expect(results).toEqual([
+    { word: 'árbol', status: 'added', vocabCards: 1, conjugationCards: 0 },
+    { word: 'CASA', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
+    ...['perro', 'gato', 'libro', 'mesa', 'silla', 'puerta', 'ventana', 'agua', 'pan', 'leche', 'calle', 'ciudad', 'playa', 'sol']
+      .map((word) => ({ word, status: 'added', vocabCards: 1, conjugationCards: 0 })),
+  ]);
+  expect(await db.select({ front: cards.front }).from(cards).where(eq(cards.wordId, 1))).toEqual([{ front: 'casa' }]);
+});
+
+test('a pack-set reports a rejected Spanish side from a later deck before every item line, then items in deck order', async () => {
+  vi.useFakeTimers();
+  servePackSet([
+    'agua', 'árbol', 'perro', 'gato', 'libro', 'mesa', 'silla', 'puerta',
+    'ventana', '¡Hola! /', 'pan', 'leche', 'calle', 'ciudad', 'playa', 'sol',
+  ]);
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>().mockImplementation(async (word) => ({
+    ...noun, spanish: word, english: word, article: null, example: null,
+  }));
+
+  const run = generateForWords(db, packSetUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+  await vi.runAllTimersAsync();
+  const { results } = await run;
+
+  expect(results).toEqual([
+    { word: '¡Hola! /', status: 'error', vocabCards: 0, conjugationCards: 0,
+      message: 'Spanish side "¡Hola! /" has an empty form at position 2; check the Brainscape text.' },
+    ...['agua', 'árbol', 'perro', 'gato', 'libro', 'mesa', 'silla', 'puerta', 'ventana', 'pan', 'leche', 'calle', 'ciudad', 'playa', 'sol']
+      .map((word) => ({ word, status: 'added', vocabCards: 1, conjugationCards: 0 })),
+  ]);
+  expect(lookup.mock.calls.flat()).toEqual([
+    'agua', 'árbol', 'perro', 'gato', 'libro', 'mesa', 'silla', 'puerta',
+    'ventana', 'pan', 'leche', 'calle', 'ciudad', 'playa', 'sol',
+  ]);
+  expect(await db.select().from(cards)).toHaveLength(15);
+  expect(renderToStaticMarkup(pageWithResults(results)).match(/<li\b/g)).toHaveLength(16);
+});
+
+test.each([
+  { page: 'set', failure: 'http' }, { page: 'deck', failure: 'http' },
+  { page: 'set', failure: 'request' }, { page: 'deck', failure: 'request' },
+  { page: 'set', failure: 'body' }, { page: 'deck', failure: 'body' },
+])('propagates a pack-set $page $failure failure before lookup or writes', async ({ page, failure }) => {
+  vi.useFakeTimers();
+  if (page === 'deck') {
+    fetchImpl.mockResolvedValueOnce(new Response(packSet)).mockResolvedValueOnce(new Response(greetings));
+  }
+  const url = page === 'set' ? packSetUrl
+    : 'https://www.brainscape.com/flashcards/39-verbs-level-2-part-1-level-2-basic-15113060/packs/21882519';
+  let message = `Brainscape request for ${url} returned HTTP 403 Forbidden; check the response and retry.`;
+  if (failure === 'request') {
+    message = 'connect ETIMEDOUT';
+    fetchImpl.mockRejectedValueOnce(new Error(message));
+  } else if (failure === 'body') {
+    message = 'Response body stream terminated';
+    const response = new Response();
+    vi.spyOn(response, 'text').mockRejectedValueOnce(new Error(message));
+    fetchImpl.mockResolvedValueOnce(response);
+  } else {
+    fetchImpl.mockResolvedValueOnce(new Response('Denied', { status: 403, statusText: 'Forbidden' }));
+  }
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>();
+  const parseList = vi.spyOn(wordListParser, 'resolveWordList');
+
+  const assertion = expect(generateForWords(db, packSetUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl)))
+    .rejects.toThrow(message);
+  await Promise.all([assertion, vi.runAllTimersAsync()]);
+
+  expect(fetchImpl).toHaveBeenCalledTimes(page === 'set' ? 1 : 3);
+  expect(parseList).not.toHaveBeenCalled();
+  expect(lookup).not.toHaveBeenCalled();
+  expect(await db.select().from(words)).toEqual([]);
+  expect(await db.select().from(cards)).toEqual([]);
 });
 
 test('reports the observed HTTP failure for a trailing-slash pack URL before lookup or writes', async () => {
@@ -915,6 +1071,9 @@ test.each(['http', 'request', 'body'])(
 
 test.each([
   { text: 'https://www.brainscape.com/packs/42\ncasa', expected: ['https://www.brainscape.com/packs/42', 'casa'] },
+  { text: 'https://www.brainscape.com/p/5M6OW-LH-D10NR\ncasa', expected: ['https://www.brainscape.com/p/5M6OW-LH-D10NR', 'casa'] },
+  { text: 'https://www.brainscape.com/p/5M6OW-LH-D10NR; casa', expected: ['https://www.brainscape.com/p/5M6OW-LH-D10NR', 'casa'] },
+  { text: 'casa, https://www.brainscape.com/p/5M6OW-LH-D10NR', expected: ['casa', 'https://www.brainscape.com/p/5M6OW-LH-D10NR'] },
   { text: 'https://notbrainscape.com/packs/42', expected: ['https://notbrainscape.com/packs/42'] },
   { text: 'Casa; ¡Adiós!/¡Chao!; CASA', expected: ['Casa', '¡Adiós!/¡Chao!'] },
 ])('preserves the ordinary word-list path for $text', async ({ text, expected }) => {

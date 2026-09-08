@@ -5,7 +5,7 @@ import type { WordInfo, WordResult } from '@/lib/types';
 import type { Db } from '@/server/db';
 import { cards, words } from '@/server/db/schema';
 import { askForJson } from './aiLookup';
-import { fetchPack, isPackUrl } from './brainscapePack';
+import { fetchPack, fetchPackSet, isPackSetUrl, isPackUrl } from './brainscapePack';
 import { spanishSideItems, type BrainscapeItem } from './brainscapeSides';
 import { cardAudio } from './cardAudio';
 import { conjugationCards, generateCards, type GeneratedCard, type LookedUpItem } from './cardGenerator';
@@ -45,14 +45,19 @@ async function inputItems(
   fetchImpl: typeof fetch,
   results: WordResult[],
 ): Promise<readonly BrainscapeItem[]> {
-  if (!isPackUrl(text)) {
+  let sides: string[];
+  if (isPackSetUrl(text)) {
+    sides = await fetchPackSet(text.trim(), fetchImpl);
+  } else if (isPackUrl(text)) {
+    sides = await fetchPack(text.trim(), fetchImpl);
+  } else {
     return (await resolveWordList(text, ask)).map((spanish) => ({
       forms: [{ spanish, query: normalizeQuery(spanish) }],
     }));
   }
 
   const items: BrainscapeItem[] = [];
-  for (const side of await fetchPack(text.trim(), fetchImpl)) {
+  for (const side of sides) {
     try {
       items.push(...spanishSideItems(side));
     } catch (error) {
