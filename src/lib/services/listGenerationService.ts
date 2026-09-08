@@ -147,7 +147,7 @@ async function generateItem(
   for (const form of item.forms) {
     lookedUp.forms.push({ ...form, info: await cachedLookup(db, form.spanish, lookup) });
   }
-  const failed = lookedUp.forms.find((form) => form.info.error !== undefined);
+  const failed = lookedUp.forms.find((form) => typeof form.info.error === 'string');
   if (failed) return errorResult(word, failed.info.error);
 
   const itemWordIds: number[] = [];

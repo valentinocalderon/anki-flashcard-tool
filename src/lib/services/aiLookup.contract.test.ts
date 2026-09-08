@@ -1,0 +1,192 @@
+import { createClient, type Client } from '@libsql/client';
+import type OpenAI from 'openai';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { loadConfig } from '@/lib/config';
+import { formatResultLine } from '@/lib/resultLine';
+import { WordInfoSchema, type WordInfo } from '@/lib/types';
+import { applyMigrations, createDb, type Db } from '@/server/db';
+import { cards, words } from '@/server/db/schema';
+import { openaiLookup } from './aiLookup';
+import { conjugationCards, generateCards } from './cardGenerator';
+import { generateForWords } from './listGenerationService';
+import { cachedLookup } from './lookupCache';
+import { createSpanishVoice } from './spanishVoice';
+
+const { createCompletion } = vi.hoisted(() => ({
+  createCompletion: vi.fn<OpenAI['chat']['completions']['create']>(),
+}));
+
+vi.mock('@/env', () => ({ env: {
+  OPENAI_API_KEY: 'test-key', ELEVENLABS_API_KEY: 'test-key', ELEVENLABS_VOICE_ID: 'test-voice',
+} }));
+vi.mock('openai', () => ({
+  default: class {
+    chat = { completions: { create: createCompletion } };
+  },
+}));
+
+const supported = {
+  english: 'house', spanish: 'casa', gender: 'feminine', article: 'la', type: 'noun',
+  example: null, exampleWord: null, conjugations: null, conjugationClass: null, error: null,
+};
+const unsupported = {
+  english: null, spanish: null, gender: null, article: null, type: null,
+  example: null, exampleWord: null, conjugations: null, conjugationClass: null,
+  error: 'Unsupported word: bonjour is not English or Spanish.',
+};
+const houseCard = {
+  deck: 'Spanish::Vocab', kind: 'basic', front: 'house', back: 'la casa', tags: ['auto-generated'],
+};
+const fetchImpl = vi.fn<typeof fetch>();
+let client: Client;
+let db: Db;
+
+function respondWith(payload: unknown) {
+  createCompletion.mockResolvedValueOnce({
+    id: 'test-completion', object: 'chat.completion', created: 0, model: 'test-model',
+    choices: [{
+      index: 0, finish_reason: 'stop', logprobs: null,
+      message: { role: 'assistant', content: JSON.stringify(payload), refusal: null },
+    }],
+  });
+}
+
+beforeEach(async () => {
+  createCompletion.mockReset();
+  fetchImpl.mockReset().mockImplementation(() => Promise.resolve(new Response(new Uint8Array([73, 68, 51]))));
+  vi.stubGlobal('fetch', vi.fn(() => { throw new Error('Unexpected network request'); }));
+  vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  client = createClient({ url: ':memory:' });
+  db = createDb(client);
+  await applyMigrations(db);
+});
+
+afterEach(() => {
+  expect(fetch).not.toHaveBeenCalled();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  client.close();
+});
+
+test('a supported lookup with explicit null error parses and generates string card faces', async () => {
+  expect(WordInfoSchema.safeParse(supported).success).toBe(true);
+  respondWith(supported);
+
+  const info = await openaiLookup('casa');
+
+  expect(info).toEqual(supported);
+  expect(generateCards(info)).toEqual([houseCard]);
+  expect(generateCards({ forms: [{ spanish: 'casa', query: 'casa', info }] })).toEqual([houseCard]);
+  expect(generateCards({ forms: [
+    { spanish: 'casa', query: 'casa', info },
+    { spanish: 'casita', query: 'casita', info: { ...info, spanish: 'casita' } },
+  ] })).toEqual([{ ...houseCard, back: 'casa / casita', forms: [
+    { spanish: 'casa', query: 'casa' }, { spanish: 'casita', query: 'casita' },
+  ] }]);
+});
+
+test('generation stores cards from a supported OpenAI response with null error', async () => {
+  respondWith(supported);
+
+  const result = await generateForWords(db, 'casa', openaiLookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  expect(result.results).toEqual([{ word: 'casa', status: 'added', vocabCards: 1, conjugationCards: 0 }]);
+  expect(await db.select({ front: cards.front, back: cards.back }).from(cards)).toEqual([
+    { front: 'house', back: 'la casa' },
+  ]);
+  expect(await cachedLookup(db, 'casa', openaiLookup)).toEqual(supported);
+  expect(createCompletion).toHaveBeenCalledOnce();
+});
+
+test('an unsupported OpenAI payload with null fields yields one result line with the model message', async () => {
+  respondWith(unsupported);
+
+  const result = await generateForWords(db, 'bonjour', openaiLookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  expect(result.results).toEqual([{
+    word: 'bonjour', status: 'error', vocabCards: 0, conjugationCards: 0,
+    message: 'Unsupported word: bonjour is not English or Spanish.',
+  }]);
+  expect(result.results.map(formatResultLine)).toEqual(['Unsupported word: bonjour is not English or Spanish.']);
+  expect(await db.select().from(words)).toEqual([]);
+  expect(await db.select().from(cards)).toEqual([]);
+  expect(fetchImpl).not.toHaveBeenCalled();
+});
+
+test('an error-only OpenAI payload parses and yields one result line with the model message', async () => {
+  const payload = { error: 'Unsupported word: bonjour is not English or Spanish.' };
+  expect(WordInfoSchema.safeParse(payload).success).toBe(true);
+  respondWith(payload);
+
+  const result = await generateForWords(db, 'bonjour', openaiLookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  expect(result.results).toEqual([{
+    word: 'bonjour', status: 'error', vocabCards: 0, conjugationCards: 0,
+    message: 'Unsupported word: bonjour is not English or Spanish.',
+  }]);
+  expect(result.results.map(formatResultLine)).toEqual(['Unsupported word: bonjour is not English or Spanish.']);
+  expect(await db.select().from(words)).toEqual([]);
+  expect(await db.select().from(cards)).toEqual([]);
+  expect(fetchImpl).not.toHaveBeenCalled();
+});
+
+test.each([
+  { shape: 'supported', query: 'casa', payload: supported },
+  { shape: 'unsupported', query: 'bonjour', payload: unsupported },
+])('a stored $shape lookup row round-trips through the shared schema', async ({ query, payload }) => {
+  await db.insert(words).values({ query, info: JSON.stringify(payload), lookedUpAt: 123 });
+
+  await expect(cachedLookup(db, query, openaiLookup)).resolves.toEqual(payload);
+  expect(createCompletion).not.toHaveBeenCalled();
+  expect(await db.select({ info: words.info }).from(words)).toEqual([{ info: JSON.stringify(payload) }]);
+});
+
+test('the lookup prompt requires null error for supported words and never omission', async () => {
+  respondWith(supported);
+  await openaiLookup('casa');
+
+  const prompt = createCompletion.mock.calls[0]?.[0].messages[0]?.content;
+  expect(prompt).toContain('If the word is supported, error must be null; never omit this field.');
+  expect(prompt).toContain('return null for the other fields');
+  expect(prompt).not.toContain("don't include this field");
+});
+
+test.each(['english', 'spanish', 'type'])(
+  'a null error cannot turn a null %s into a successful lookup', (field) => {
+    expect(WordInfoSchema.safeParse({ ...supported, [field]: null }).success).toBe(false);
+  },
+);
+
+test.each(['word', 'conjugations'])(
+  'the %s card entry point reports a lookup error before generating cards', (entry) => {
+    const info = { ...supported, error: 'Unsupported word: bonjour is not English or Spanish.' };
+
+    expect(() => entry === 'word' ? generateCards(info) : conjugationCards(info, new Set())).toThrow(
+      'Cannot generate cards: lookup returned error "Unsupported word: bonjour is not English or Spanish.".',
+    );
+  },
+);
+
+test('an empty error string is still a lookup failure and is never cached', async () => {
+  const info = { ...supported, error: '' };
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>().mockResolvedValue(info);
+
+  expect(await cachedLookup(db, 'bonjour', lookup)).toEqual(info);
+  expect(await cachedLookup(db, 'bonjour', lookup)).toEqual(info);
+  expect(lookup).toHaveBeenCalledTimes(2);
+  expect(await db.select().from(words)).toEqual([]);
+});
+
+test('an OpenAI rejection reports the observed message and commits no word or cards', async () => {
+  createCompletion.mockRejectedValueOnce(new Error('OpenAI returned HTTP 503: Service Unavailable'));
+
+  const result = await generateForWords(db, 'casa', openaiLookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  expect(result.results).toEqual([{
+    word: 'casa', status: 'error', vocabCards: 0, conjugationCards: 0,
+    message: 'OpenAI returned HTTP 503: Service Unavailable',
+  }]);
+  expect(await db.select().from(words)).toEqual([]);
+  expect(await db.select().from(cards)).toEqual([]);
+  expect(fetchImpl).not.toHaveBeenCalled();
+});

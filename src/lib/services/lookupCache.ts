@@ -20,7 +20,7 @@ export async function cachedLookup(
   }
 
   const result = await lookup(word);
-  if (result.error) {
+  if (typeof result.error === 'string') {
     return result;
   }
 

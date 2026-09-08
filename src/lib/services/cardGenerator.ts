@@ -12,6 +12,9 @@ export type GeneratedCard = Card & {
 
 export function generateCards(wordInfo: WordInfo | LookedUpItem): GeneratedCard[] {
   if ('forms' in wordInfo) return generateItemCards(wordInfo);
+  if (typeof wordInfo.error === 'string') {
+    throw new Error(`Cannot generate cards: lookup returned error "${wordInfo.error}".`);
+  }
 
   const config = loadConfig();
   const tags = config.addTags;
@@ -61,7 +64,7 @@ function generateItemCards(item: LookedUpItem): GeneratedCard[] {
     throw new Error('Cannot generate cards for an item with 0 forms; supply at least one looked-up form.');
   }
   for (const form of item.forms) {
-    if (form.info.error !== undefined) {
+    if (typeof form.info.error === 'string') {
       throw new Error(`Cannot generate cards for "${form.spanish}": lookup returned error "${form.info.error}".`);
     }
   }
@@ -86,6 +89,9 @@ export function conjugationCards(
   wordInfo: WordInfo,
   cardedKeys: ReadonlySet<string>
 ): { cards: Card[]; claims: { front: string; key: string }[] } {
+  if (typeof wordInfo.error === 'string') {
+    throw new Error(`Cannot generate cards: lookup returned error "${wordInfo.error}".`);
+  }
   const config = loadConfig();
   const cards: Card[] = [];
   const claimedKeys = new Set<string>();

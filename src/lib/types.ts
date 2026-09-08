@@ -16,22 +16,6 @@ export type Card = {
   tags: string[];
 };
 
-export type WordInfo = {
-  english: string;
-  spanish: string;
-  gender: string | null;
-  article: string | null;
-  type: string;
-  example: string | null;
-  exampleWord?: string | null;
-  conjugations: {
-    present?: Record<string, string>;
-    preterite?: Record<string, string>;
-  } | null;
-  conjugationClass?: z.infer<typeof conjugationClassSchema> | null;
-  error?: string;
-};
-
 export type WordResult = {
   word: string;
   vocabCards: number;
@@ -41,7 +25,7 @@ export type WordResult = {
   | { status: 'error'; message: string }
 );
 
-export const WordInfoSchema = z.object({
+const supportedWordInfoSchema = z.object({
   english: z.string(),
   spanish: z.string(),
   gender: z.string().nullable(),
@@ -56,8 +40,21 @@ export const WordInfoSchema = z.object({
     })
     .nullable(),
   conjugationClass: conjugationClassSchema.nullable().optional(),
-  error: z.string().optional()
+  // Older cached successes omitted error; new lookups explicitly return null.
+  error: z.null().optional(),
 });
+
+export const WordInfoSchema = z.union([
+  supportedWordInfoSchema,
+  supportedWordInfoSchema.extend({
+    english: z.string().nullable().optional(),
+    spanish: z.string().nullable().optional(),
+    type: z.string().nullable().optional(),
+    error: z.string(),
+  }).partial({ gender: true, article: true, example: true, conjugations: true }),
+]);
+
+export type WordInfo = z.infer<typeof WordInfoSchema>;
 
 export const CardSchema = z.object({
   deck: z.string(),
