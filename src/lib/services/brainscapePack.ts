@@ -59,6 +59,28 @@ export function deckLinks(html: string, packId: string): string[] {
   return [...links];
 }
 
+export function packSetLinks(html: string): string[] {
+  const canonical = [...html.matchAll(/<link\b[^>]*>/gi)]
+    .find((tag) => attribute(tag[0], 'rel') === 'canonical');
+  const href = canonical && attribute(canonical[0], 'href');
+  if (!href) {
+    throw new Error('Brainscape page has no canonical link href; check the page HTML.');
+  }
+  if (!URL.canParse(href, 'https://www.brainscape.com')) {
+    throw new Error(`Brainscape canonical href ${href} is not a valid URL; check the page HTML.`);
+  }
+  const path = new URL(href, 'https://www.brainscape.com').pathname;
+  const packId = /^\/packs\/(?:[^/\s]+-)?(\d+)$/.exec(path)?.[1];
+  if (!packId) {
+    throw new Error(`Brainscape canonical URL ${href} has no /packs/SLUG-DIGITS or /packs/DIGITS path; check the page HTML.`);
+  }
+  const links = deckLinks(html, packId);
+  if (links.length === 0) {
+    throw new Error(`Brainscape page ${href} contained ${links.length} deck links for pack ${packId}; check the page HTML.`);
+  }
+  return links;
+}
+
 export function spanishSides(html: string): string[] {
   const sides: string[] = [];
   // Anchor on the card id: answer-contents also occurs in the inline stylesheet.
@@ -105,6 +127,16 @@ export function isPackUrl(text: string): boolean {
   return (url.protocol === 'http:' || url.protocol === 'https:')
     && (url.hostname === 'brainscape.com' || url.hostname.endsWith('.brainscape.com'))
     && /\/packs\/\d+\/?$/.test(url.pathname);
+}
+
+export function isPackSetUrl(text: string): boolean {
+  const value = text.trim();
+  if (/\s/.test(value) || !URL.canParse(value)) return false;
+
+  const url = new URL(value);
+  return (url.protocol === 'http:' || url.protocol === 'https:')
+    && (url.hostname === 'brainscape.com' || url.hostname.endsWith('.brainscape.com'))
+    && /^\/p\/[a-zA-Z\d-]+\/?$/.test(url.pathname);
 }
 
 export async function fetchPack(url: string, fetchImpl: typeof fetch): Promise<string[]> {

@@ -1,10 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { deckLinks, fetchPack, isPackUrl, spanishSides } from './brainscapePack';
+import { deckLinks, fetchPack, isPackSetUrl, isPackUrl, packSetLinks, spanishSides } from './brainscapePack';
 
 const packId = '21648778';
 const packUrl = `https://www.brainscape.com/packs/${packId}`;
 const pack = readFileSync(new URL('./__fixtures__/brainscape/pack.html', import.meta.url), 'utf8');
+const packSet = readFileSync(new URL('./__fixtures__/brainscape/packset.html', import.meta.url), 'utf8');
 const greetings = readFileSync(new URL('./__fixtures__/brainscape/deck-common-greetings.html', import.meta.url), 'utf8');
 const nouns = readFileSync(new URL('./__fixtures__/brainscape/deck-nouns-articles.html', import.meta.url), 'utf8');
 const links = [
@@ -84,6 +85,60 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+test('distinguishes pack-set URLs from pack URLs and word lists', () => {
+  const cases = [
+    { text: 'https://www.brainscape.com/p/5M6OW-LH-D10NR', packSet: true, pack: false },
+    { text: 'https://www.brainscape.com/packs/21648778', packSet: false, pack: true },
+    { text: 'hola\nadiós', packSet: false, pack: false },
+    { text: 'https://example.com/p/5M6OW-LH-D10NR', packSet: false, pack: false },
+    { text: '/p/5M6OW-LH-D10NR', packSet: false, pack: false },
+  ];
+
+  for (const { text, packSet, pack } of cases) {
+    expect(isPackSetUrl(text), text).toBe(packSet);
+    expect(isPackUrl(text), text).toBe(pack);
+  }
+});
+
+test('recognizes one whole Brainscape pack-set URL with the allowed origin and path', () => {
+  for (const text of [
+    ' \n\thttps://brainscape.com/p/5M6OW-LH-D10NR\t ',
+    'http://BRAINSCAPE.com/p/abc123/',
+    'https://learn.brainscape.com/p/abc-123?source=share#cards',
+  ]) {
+    expect(isPackSetUrl(text), text).toBe(true);
+    expect(isPackUrl(text), text).toBe(false);
+  }
+});
+
+test('rejects contents without one valid Brainscape pack-set URL', () => {
+  for (const text of [
+    '', 'casa', 'not a URL', 'https://[',
+    'https://www.brainscape.com/p/abc\ncasa',
+    'https://www.brainscape.com/p/abc https://www.brainscape.com/p/def',
+    'https://www.brainscape.com/p/ab\nc',
+    'https://www.brainscape.com/p/abc?source=two words',
+    'ftp://www.brainscape.com/p/abc',
+    'https://notbrainscape.com/p/abc',
+    'https://brainscape.com.example.com/p/abc',
+    'https://brainscape.com@other.example/p/abc',
+    'https://www.brainscape.com/learn/spanish',
+    'https://www.brainscape.com/nested/p/abc',
+    'https://www.brainscape.com/P/abc',
+    'https://www.brainscape.com/p/abc//',
+    'https://www.brainscape.com/p/abc/decks',
+    'https://www.brainscape.com/p/abc_def',
+    'https://www.brainscape.com/p/abc.def',
+    'https://www.brainscape.com/p/',
+    'https://www.brainscape.com/p/ábc',
+    'https://www.brainscape.com/p/４２',
+    '/packs/21648778',
+  ]) {
+    expect(isPackSetUrl(text), text).toBe(false);
+    expect(isPackUrl(text), text).toBe(false);
+  }
+});
+
 test.each([
   'https://www.brainscape.com/packs/21648778',
   'https://www.brainscape.com/packs/42/',
@@ -137,6 +192,71 @@ test('dedupes hrefs, matches the whole pack id, and ignores non-href text', () =
   expect(deckLinks(html, '4.')).toEqual([]);
   expect(deckLinks('', packId)).toEqual([]);
   expect(deckLinks(pack, '999')).toEqual([]);
+});
+
+test('extracts exactly sixteen pack-set links in page order from the saved fixture', () => {
+  expect(packSetLinks(packSet)).toEqual([
+    '/flashcards/38-vocabulary-level-2-part-1-level-2-bas-15113057/packs/21882519',
+    '/flashcards/39-verbs-level-2-part-1-level-2-basic-15113060/packs/21882519',
+    '/flashcards/40-the-numbers-level-2-basic-15113061/packs/21882519',
+    '/flashcards/42-the-time-level-2-basic-15113064/packs/21882519',
+    '/flashcards/44-possessives-1-level-2-basic-15113066/packs/21882519',
+    '/flashcards/46-expressing-possession-with-de-level-2-15113068/packs/21882519',
+    '/flashcards/48-to-have-to-have-to-level-2-basic-15113070/packs/21882519',
+    '/flashcards/50-can-can-t-level-2-basic-15113073/packs/21882519',
+    '/flashcards/52-vocabulary-level-2-part-2-level-2-bas-15113074/packs/21882519',
+    '/flashcards/53-verbs-level-2-part-2-level-2-basic-15113078/packs/21882519',
+    '/flashcards/54-demonstratives-level-2-basic-15113079/packs/21882519',
+    '/flashcards/56-to-want-to-prefer-to-need-level-2-bas-15113081/packs/21882519',
+    '/flashcards/58-i-like-i-love-i-m-interested-in-level-15113082/packs/21882519',
+    '/flashcards/60-vocabulary-level-2-basic-part-3-level-15113083/packs/21882519',
+    '/flashcards/61-be-going-to-level-2-basic-15113084/packs/21882519',
+    '/flashcards/63-window-words-2-level-2-basic-15113086/packs/21882519',
+  ]);
+});
+
+test.each(['https://www.brainscape.com/packs/42', '/packs/level-2-42'])(
+  'keeps pack-set deck order, deduplication and pack filtering for canonical %s', (href) => {
+    const html = `<link rel='alternate' href='/packs/420'>
+      <link href="${href}" rel="canonical">
+      <a href='/flashcards/other/packs/420'>other pack</a>
+      <a href='/flashcards/z/packs/42'>z</a>
+      <a href='/flashcards/a/packs/42'>a</a>
+      <a href='/flashcards/z/packs/42'>z again</a>
+      <a href='/flashcards/query/packs/42?x=1'>query</a>
+      <a data-href='/flashcards/data/packs/42'>data</a>
+      <div>/flashcards/text/packs/42</div>`;
+
+    expect(packSetLinks(html)).toEqual(['/flashcards/z/packs/42', '/flashcards/a/packs/42']);
+  },
+);
+
+test.each([
+  "<link rel='alternate' href='/packs/42'><a rel='canonical' href='/packs/42'>pack</a>",
+  "<link rel='canonical'>",
+])('reports a missing pack-set canonical link href without guessing from deck links: %s', (html) => {
+  expect(() => packSetLinks(html + "<a href='/flashcards/z/packs/42'>z</a>"))
+    .toThrow(new Error('Brainscape page has no canonical link href; check the page HTML.'));
+});
+
+test('reports an invalid pack-set canonical href', () => {
+  expect(() => packSetLinks('<link rel="canonical" href="https://[">'))
+    .toThrow(new Error('Brainscape canonical href https://[ is not a valid URL; check the page HTML.'));
+});
+
+test.each(['/learn/spanish', '/flashcards/lesson/packs/42', '/packs/lesson42'])(
+  'reports a pack-set canonical path without a pack id: %s', (href) => {
+    expect(() => packSetLinks(`<link rel='canonical' href='${href}'>`))
+      .toThrow(new Error(`Brainscape canonical URL ${href} has no /packs/SLUG-DIGITS or /packs/DIGITS path; check the page HTML.`));
+  },
+);
+
+test('reports zero pack-set deck links for the canonical pack even when another pack has links', () => {
+  const html = `<link rel='canonical' href='https://www.brainscape.com/packs/42'>
+    <a href='/flashcards/other/packs/420'>other pack</a>`;
+
+  expect(() => packSetLinks(html))
+    .toThrow(new Error('Brainscape page https://www.brainscape.com/packs/42 contained 0 deck links for pack 42; check the page HTML.'));
 });
 
 test('extracts every answer without footnotes from the common greetings fixture in page order', () => {
