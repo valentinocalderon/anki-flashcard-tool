@@ -33,7 +33,7 @@ const goodbye: WordInfo = {
 };
 const storedGoodbye: typeof cards.$inferSelect = {
   id: 1, wordId: 1, deck: 'Spanish::Vocab', kind: 'basic', front: 'goodbye', back: '¡Adiós!',
-  tags: '["auto-generated"]', ankiNoteId: 987654, sentAt: 456, declinedAt: null, createdAt: 123,
+  tags: '["auto-generated"]', forms: null, ankiNoteId: 987654, sentAt: 456, declinedAt: null, createdAt: 123,
 };
 const regularVerb: WordInfo = {
   english: 'to speak', spanish: 'hablar', gender: null, article: null, type: 'verb',
@@ -302,17 +302,16 @@ test('renders two identical malformed sides as two visible result lines with dis
 });
 
 test.each([
-  { carded: 'casa', id: 1, firstWordId: 1, itemWordIds: [1, 2], remaining: 'hogar' },
-  { carded: 'hogar', id: 2, firstWordId: 3, itemWordIds: [3, 2], remaining: 'casa' },
-])('generates a partly carded group once, using cached $carded and the first form row', async ({ carded, id, firstWordId, itemWordIds, remaining }) => {
+  { carded: 'casa', id: 1, firstWordId: 1, remaining: 'hogar', front: 'house' },
+  { carded: 'hogar', id: 2, firstWordId: 3, remaining: 'casa', front: 'home' },
+])('enriches the card owned by $carded even when the folded English differs', async ({ carded, id, firstWordId, remaining, front }) => {
   const house = { ...noun, example: null };
-  const home = { ...house, spanish: 'hogar', article: 'el', gender: 'masculine' };
+  const home = { ...house, english: 'home', spanish: 'hogar', article: 'el', gender: 'masculine' };
   await db.insert(words).values({
     id, query: carded, info: JSON.stringify(carded === 'casa' ? house : home), lookedUpAt: 123,
   });
   await db.insert(cards).values({
-    wordId: id, deck: 'Spanish::Vocab', kind: 'basic', front: 'house', back: 'stored answer',
-    tags: '[]', createdAt: 123,
+    ...storedGoodbye, id: 41, wordId: id, front, back: 'stored answer', tags: '["original"]',
   });
   serveSides(['casa / hogar']);
   const lookup = vi.fn<(word: string) => Promise<WordInfo>>()
@@ -326,7 +325,7 @@ test.each([
     { word: 'casa / hogar', status: 'updated', vocabCards: 0, conjugationCards: 0 },
   ]);
   expect(renderToStaticMarkup(pageWithResults(results)).match(/<li\b[^>]*>.*?<\/li>/g)).toEqual([
-    '<li class="bg-gray-100 p-3 rounded"><span aria-hidden="true" class="text-xs mr-2">!</span><strong>casa / hogar</strong>: updated: stored card changed; check Anki if this card was already sent</li>',
+    '<li class="bg-gray-100 p-3 rounded"><span aria-hidden="true" class="text-xs mr-2">↻</span><strong>casa / hogar</strong>: updated: stored card changed; check Anki if this card was already sent</li>',
   ]);
   expect(lookup).toHaveBeenCalledExactlyOnceWith(remaining);
   expect(cached.mock.calls).toEqual([[db, 'casa', lookup], [db, 'hogar', lookup]]);
@@ -335,12 +334,30 @@ test.each([
     { spanish: 'hogar', query: 'hogar', info: home },
   ] });
   expect(store).toHaveBeenCalledExactlyOnceWith(db, firstWordId, [{
-    deck: 'Spanish::Vocab', kind: 'basic', front: 'house', back: 'casa / hogar',
+    deck: 'Spanish::Vocab', kind: 'basic', front: 'house / home', back: 'casa / hogar',
     tags: ['auto-generated'], forms: [
       { spanish: 'casa', query: 'casa' }, { spanish: 'hogar', query: 'hogar' },
     ],
-  }], [], true, itemWordIds);
-  expect(await db.select().from(cards)).toEqual([expect.objectContaining({ wordId: id, back: 'casa / hogar' })]);
+  }], [], 41);
+  expect(await db.select().from(cards)).toEqual([{
+    ...storedGoodbye, id: 41, wordId: id, front, back: 'casa / hogar', tags: '["original"]',
+    forms: [{ spanish: 'casa', query: 'casa' }, { spanish: 'hogar', query: 'hogar' }],
+  }]);
+  cached.mockClear();
+  generate.mockClear();
+  store.mockClear();
+  serveSides(['casa / hogar']);
+  expect(await generateForWords(db, singleDeckUrl, lookup, fetchImpl)).toEqual([
+    { word: 'casa / hogar', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
+  ]);
+  expect(await generateForWords(db, 'CASA\nHOGAR', lookup, fetchImpl)).toEqual([
+    { word: 'CASA', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
+    { word: 'HOGAR', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
+  ]);
+  expect(cached).not.toHaveBeenCalled();
+  expect(generate).not.toHaveBeenCalled();
+  expect(store).not.toHaveBeenCalled();
+  expect(lookup).toHaveBeenCalledExactlyOnceWith(remaining);
 });
 
 test('enriches a carded goodbye in place with its pack alternative, preserving the Anki note', async () => {
@@ -358,10 +375,13 @@ test('enriches a carded goodbye in place with its pack alternative, preserving t
     { word: '¡Adiós! / ¡Chao!', status: 'updated', vocabCards: 0, conjugationCards: 0 },
   ]);
   expect(await store.mock.results[0]?.value).toEqual({ vocabCards: 0, conjugationCards: 0, updatedCards: 1 });
-  expect(await db.select().from(cards)).toEqual([{ ...storedGoodbye, back: '¡Adiós! / ¡Chao!' }]);
+  expect(await db.select().from(cards)).toEqual([{
+    ...storedGoodbye, back: '¡Adiós! / ¡Chao!',
+    forms: [{ spanish: '¡Adiós!', query: '¡adiós!' }, { spanish: '¡Chao!', query: '¡chao!' }],
+  }]);
   expect(lookup.mock.calls).toEqual([['¡adiós!'], ['¡Chao!']]);
   expect(renderToStaticMarkup(pageWithResults(results)))
-    .toContain('<span aria-hidden="true" class="text-xs mr-2">!</span>');
+    .toContain('<span aria-hidden="true" class="text-xs mr-2">↻</span>');
 });
 
 test('preserves a sent synonym card when a partly carded pack item collides with its front', async () => {
@@ -394,6 +414,99 @@ test('preserves a sent synonym card when a partly carded pack item collides with
   expect(lookup.mock.calls).toEqual([['el coche'], ['el carro'], ['el auto']]);
 });
 
+test('enriches the owning card when an unrelated card already has the folded front', async () => {
+  await db.insert(words).values([
+    { id: 1, query: 'casa', info: JSON.stringify({ ...noun, example: null }), lookedUpAt: 123 },
+    { id: 2, query: 'vivienda', info: '{}', lookedUpAt: 123 },
+  ]);
+  const owner = { ...storedGoodbye, front: 'house', back: 'la casa' };
+  const unrelated = { ...storedGoodbye, id: 2, wordId: 2, front: 'house / home', back: 'la vivienda' };
+  await db.insert(cards).values([owner, unrelated]);
+  serveSides(['casa / hogar']);
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>()
+    .mockResolvedValue({ ...noun, english: 'home', spanish: 'hogar', example: null });
+
+  expect(await generateForWords(db, singleDeckUrl, lookup, fetchImpl)).toEqual([
+    { word: 'casa / hogar', status: 'updated', vocabCards: 0, conjugationCards: 0 },
+  ]);
+  expect(await db.select().from(cards).orderBy(cards.id)).toEqual([
+    { ...owner, back: 'casa / hogar', forms: [
+      { spanish: 'casa', query: 'casa' }, { spanish: 'hogar', query: 'hogar' },
+    ] },
+    unrelated,
+  ]);
+});
+
+test('resolves a later fold through a recorded secondary form and retains earlier alternatives', async () => {
+  serveSides(['¡Adiós! / ¡Chao!']);
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>()
+    .mockResolvedValueOnce(goodbye)
+    .mockResolvedValueOnce({ ...goodbye, english: 'bye', spanish: '¡Chao!' })
+    .mockResolvedValueOnce({ ...goodbye, english: 'see you later', spanish: 'Hasta luego' });
+  expect(await generateForWords(db, singleDeckUrl, lookup, fetchImpl)).toEqual([
+    { word: '¡Adiós! / ¡Chao!', status: 'added', vocabCards: 1, conjugationCards: 0 },
+  ]);
+  serveSides(['¡Chao! / Hasta luego']);
+  expect(await generateForWords(db, singleDeckUrl, lookup, fetchImpl)).toEqual([
+    { word: '¡Chao! / Hasta luego', status: 'updated', vocabCards: 0, conjugationCards: 0 },
+  ]);
+  expect(await db.select().from(cards)).toEqual([expect.objectContaining({
+    id: 1, wordId: 1, front: 'goodbye / bye', back: '¡Chao! / Hasta luego / ¡Adiós!',
+    forms: [
+      { spanish: '¡Chao!', query: '¡chao!' },
+      { spanish: 'Hasta luego', query: 'hasta luego' },
+      { spanish: '¡Adiós!', query: '¡adiós!' },
+    ],
+  })]);
+  expect(await generateForWords(db, '¡ADIÓS!\n¡CHAO!\nHasta luego', lookup, fetchImpl)).toEqual([
+    { word: '¡ADIÓS!', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
+    { word: '¡CHAO!', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
+    { word: 'Hasta luego', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
+  ]);
+  expect(lookup.mock.calls).toEqual([['¡Adiós!'], ['¡Chao!'], ['Hasta luego']]);
+});
+
+test('skips normalized recorded forms before reading an unusable cache', async () => {
+  await db.insert(words).values({ id: 1, query: 'casa', info: 'unreadable cache', lookedUpAt: 123 });
+  await db.insert(cards).values({ ...storedGoodbye, front: 'house', back: 'casa / hogar', forms: [
+    { spanish: 'casa', query: 'casa' }, { spanish: 'hogar', query: ' HOGAR\t' },
+  ] });
+  const cached = vi.spyOn(lookupCache, 'cachedLookup');
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>();
+
+  expect(await generateForWords(db, 'hogar', lookup, fetchImpl)).toEqual([
+    { word: 'hogar', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
+  ]);
+  expect(cached).not.toHaveBeenCalled();
+  expect(lookup).not.toHaveBeenCalled();
+  expect(await db.select({ query: words.query }).from(words)).toEqual([{ query: 'casa' }]);
+});
+
+test.each(['throw', 'payload'])('retains a committed enrichment when the next lookup fails by %s', async (failure) => {
+  await db.insert(words).values({ id: 1, query: '¡adiós!', info: JSON.stringify(goodbye), lookedUpAt: 123 });
+  await db.insert(cards).values(storedGoodbye);
+  serveSides(['¡Adiós! / ¡Chao!', 'casa / hogar']);
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>()
+    .mockResolvedValueOnce({ ...goodbye, spanish: '¡Chao!', english: 'bye' })
+    .mockResolvedValueOnce(noun);
+  if (failure === 'throw') lookup.mockRejectedValueOnce(new Error('Lookup timed out after 1000 ms'));
+  else lookup.mockResolvedValueOnce({ ...noun, error: 'Lookup returned HTTP 503' });
+
+  expect(await generateForWords(db, singleDeckUrl, lookup, fetchImpl)).toEqual([
+    { word: '¡Adiós! / ¡Chao!', status: 'updated', vocabCards: 0, conjugationCards: 0 },
+    { word: 'casa / hogar', status: 'error', vocabCards: 0, conjugationCards: 0,
+      message: failure === 'throw' ? 'Lookup timed out after 1000 ms' : 'Lookup returned HTTP 503' },
+  ]);
+  expect(await db.select().from(cards)).toEqual([{
+    ...storedGoodbye, back: '¡Adiós! / ¡Chao!', forms: [
+      { spanish: '¡Adiós!', query: '¡adiós!' }, { spanish: '¡Chao!', query: '¡chao!' },
+    ],
+  }]);
+  expect(await db.select({ query: words.query }).from(words).orderBy(words.id)).toEqual([
+    { query: '¡adiós!' }, { query: '¡chao!' }, { query: 'casa' },
+  ]);
+});
+
 test('reports a missing second form cache row without enriching and continues the pack', async () => {
   const lookup = vi.fn<(word: string) => Promise<WordInfo>>()
     .mockResolvedValueOnce(goodbye).mockResolvedValueOnce(goodbye).mockResolvedValueOnce(noun);
@@ -420,7 +533,7 @@ test('reports a missing second form cache row without enriching and continues th
   expect((await db.select().from(words).orderBy(words.id)).map(({ query }) => query)).toEqual(['¡adiós!', 'casa']);
 });
 
-test('reports exists when a partly carded item only has a differing conjugation back', async () => {
+test('records missing forms even when the basic back matches and leaves conjugation backs untouched', async () => {
   const lookup = vi.fn<(word: string) => Promise<WordInfo>>().mockResolvedValue(irregularVerb);
   expect(await generateForWords(db, 'ir', lookup, fetchImpl)).toEqual([
     { word: 'ir', status: 'added', vocabCards: 1, conjugationCards: 2 },
@@ -431,7 +544,7 @@ test('reports exists when a partly carded item only has a differing conjugation 
   serveSides(['ir / marchar']);
 
   expect(await generateForWords(db, singleDeckUrl, lookup, fetchImpl)).toEqual([
-    { word: 'ir / marchar', status: 'exists', vocabCards: 0, conjugationCards: 0 },
+    { word: 'ir / marchar', status: 'updated', vocabCards: 0, conjugationCards: 0 },
   ]);
   expect((await db.select().from(cards).orderBy(cards.id)).map(({ front, back }) => ({ front, back }))).toEqual([
     { front: 'to go', back: 'ir / marchar' },
@@ -441,10 +554,13 @@ test('reports exists when a partly carded item only has a differing conjugation 
       back: 'yo: fui<br>tú: fuiste<br>él/ella: fue<br>nosotros: fuimos<br>vosotros: fuisteis<br>ellos: fueron',
     },
   ]);
+  expect(await db.select({ forms: cards.forms }).from(cards).where(eq(cards.front, 'to go'))).toEqual([{
+    forms: [{ spanish: 'ir', query: 'ir' }, { spanish: 'marchar', query: 'marchar' }],
+  }]);
   expect(lookup.mock.calls).toEqual([['ir'], ['marchar']]);
 });
 
-test('reports exists for the same pack item twice without issuing an update or touching the card', async () => {
+test('skips the same pack item twice before lookup, generation or storage', async () => {
   const lookup = vi.fn<(word: string) => Promise<WordInfo>>().mockResolvedValue(goodbye);
   serveSides(['¡Adiós! / ¡Chao!']);
   expect(await generateForWords(db, singleDeckUrl, lookup, fetchImpl)).toEqual([
@@ -459,14 +575,17 @@ test('reports exists for the same pack item twice without issuing an update or t
   const store = vi.spyOn(cardStore, 'storeCards');
 
   expect(await generateForWords(db, singleDeckUrl, lookup, fetchImpl)).toEqual([
-    { word: '¡Adiós! / ¡Chao!', status: 'exists', vocabCards: 0, conjugationCards: 0 },
+    { word: '¡Adiós! / ¡Chao!', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
   ]);
-  expect(await store.mock.results[0]?.value).toEqual({ vocabCards: 0, conjugationCards: 0, updatedCards: 0 });
-  expect(await db.select().from(cards)).toEqual([{ ...storedGoodbye, back: '¡Adiós! / ¡Chao!' }]);
+  expect(store).not.toHaveBeenCalled();
+  expect(await db.select().from(cards)).toEqual([{
+    ...storedGoodbye, back: '¡Adiós! / ¡Chao!',
+    forms: [{ spanish: '¡Adiós!', query: '¡adiós!' }, { spanish: '¡Chao!', query: '¡chao!' }],
+  }]);
   expect(lookup.mock.calls).toEqual([['¡Adiós!'], ['¡Chao!']]);
 });
 
-test('skips a standalone goodbye after its richer pack item without changing the stored card', async () => {
+test.each(['¡adiós!', '¡CHAO!'])('skips standalone %s after its richer pack item without changing the stored card', async (word) => {
   const lookup = vi.fn<(word: string) => Promise<WordInfo>>().mockResolvedValue(goodbye);
   serveSides(['¡Adiós! / ¡Chao!']);
   expect(await generateForWords(db, singleDeckUrl, lookup, fetchImpl)).toEqual([
@@ -475,11 +594,18 @@ test('skips a standalone goodbye after its richer pack item without changing the
   await db.update(cards).set({ ankiNoteId: 987654, sentAt: 456, createdAt: 123 }).where(eq(cards.id, 1));
   const store = vi.spyOn(cardStore, 'storeCards');
 
-  expect(await generateForWords(db, '¡adiós!', lookup, fetchImpl)).toEqual([
-    { word: '¡adiós!', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
+  const cached = vi.spyOn(lookupCache, 'cachedLookup');
+  const generate = vi.spyOn(cardGenerator, 'generateCards');
+  expect(await generateForWords(db, word, lookup, fetchImpl)).toEqual([
+    { word, status: 'skipped', vocabCards: 0, conjugationCards: 0 },
   ]);
   expect(store).not.toHaveBeenCalled();
-  expect(await db.select().from(cards)).toEqual([{ ...storedGoodbye, back: '¡Adiós! / ¡Chao!' }]);
+  expect(cached).not.toHaveBeenCalled();
+  expect(generate).not.toHaveBeenCalled();
+  expect(await db.select().from(cards)).toEqual([{
+    ...storedGoodbye, back: '¡Adiós! / ¡Chao!',
+    forms: [{ spanish: '¡Adiós!', query: '¡adiós!' }, { spanish: '¡Chao!', query: '¡chao!' }],
+  }]);
   expect(lookup.mock.calls).toEqual([['¡Adiós!'], ['¡Chao!']]);
 });
 
@@ -504,7 +630,7 @@ test('asks to check Anki if already sent and shows inserted counts when an item 
     'yo: hablé<br>tú: hablaste<br>él/ella: habló<br>nosotros: hablamos<br>vosotros: hablasteis<br>ellos: hablaron',
   ]);
   expect(renderToStaticMarkup(pageWithResults(results)).match(/<li\b[^>]*>.*?<\/li>/g)).toEqual([
-    '<li class="bg-gray-100 p-3 rounded"><span aria-hidden="true" class="text-xs mr-2">!</span><strong>hablar / platicar</strong>: 2 conjugation cards added; updated: stored card changed; check Anki if this card was already sent</li>',
+    '<li class="bg-gray-100 p-3 rounded"><span aria-hidden="true" class="text-xs mr-2">↻</span><strong>hablar / platicar</strong>: 2 conjugation cards added; updated: stored card changed; check Anki if this card was already sent</li>',
   ]);
 });
 
@@ -525,7 +651,7 @@ test('reports a rejected enrichment, preserves the stored note and cache, and pr
     expect.objectContaining({ word: '¡Adiós! / ¡Chao!', status: 'error', vocabCards: 0, conjugationCards: 0 }),
     { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 },
   ]);
-  expect(results[0]?.message).toContain('on conflict ("cards"."deck", "cards"."front") do update set "back" = ?');
+  expect(results[0]?.message).toContain('update "cards" set "back" = ?, "forms" = ? where "cards"."id" = ?');
   expect(await db.select().from(cards).where(eq(cards.id, 1))).toEqual([storedGoodbye]);
   expect((await db.select().from(cards).orderBy(cards.id)).map(({ front }) => front)).toEqual([
     'goodbye', 'house', 'La ____ es grande.',
@@ -697,7 +823,7 @@ test('reports a rejected stored-word read without lookup or writes', async () =>
     }),
   ]);
   expect(results[0]?.message).toBe(
-    'Failed query: select "words"."query" from "words" inner join "cards" on "cards"."word_id" = "words"."id"\nparams: ',
+    'Failed query: select "words"."query", "cards"."id", "cards"."kind", "cards"."forms" from "words" inner join "cards" on "cards"."word_id" = "words"."id" order by "cards"."id"\nparams: ',
   );
   expect(cached).not.toHaveBeenCalled();
   expect(lookup).not.toHaveBeenCalled();
@@ -758,7 +884,7 @@ test('reports exists when a cached word with no cards generates a stored front i
   ];
   const storedCard: typeof cards.$inferSelect = {
     id: 1, wordId: 1, deck: 'Spanish::Vocab', kind: 'basic', front: 'house', back: 'el hogar',
-    tags: '["auto-generated"]', ankiNoteId: null, sentAt: null, declinedAt: null, createdAt: 123,
+    tags: '["auto-generated"]', forms: null, ankiNoteId: null, sentAt: null, declinedAt: null, createdAt: 123,
   };
   await db.insert(words).values(storedWords);
   await db.insert(cards).values(storedCard);

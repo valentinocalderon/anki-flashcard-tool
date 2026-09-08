@@ -66,13 +66,17 @@ async function generateItem(
   lookup: (word: string) => Promise<WordInfo>,
 ): Promise<WordResult> {
   const word = item.forms.map((form) => form.spanish).join(' / ');
-  const storedWords = await db.select({ query: words.query }).from(words)
-    .innerJoin(cards, eq(cards.wordId, words.id));
-  const cardedForms = item.forms.map((form) => storedWords.some((row) => normalizeQuery(row.query) === form.query));
-  if (cardedForms.every(Boolean)) {
+  const storedWords = await db.select({
+    query: words.query, cardId: cards.id, kind: cards.kind, forms: cards.forms,
+  }).from(words).innerJoin(cards, eq(cards.wordId, words.id)).orderBy(cards.id);
+  const cardsByForm = item.forms.map((form) => storedWords.filter((row) =>
+    normalizeQuery(row.query) === form.query ||
+    row.forms?.some((storedForm) => normalizeQuery(storedForm.query) === form.query),
+  ));
+  if (cardsByForm.every((rows) => rows.length > 0)) {
     return { word, status: 'skipped', vocabCards: 0, conjugationCards: 0 };
   }
-  const partlyCarded = cardedForms.some(Boolean);
+  const foldedCardId = cardsByForm.flat().find((row) => row.kind === 'basic')?.cardId;
 
   const lookedUp: LookedUpItem = { forms: [] };
   for (const form of item.forms) {
@@ -100,8 +104,7 @@ async function generateItem(
     db, wordId,
     [...generateCards(lookedUp.forms.length === 1 ? first.info : lookedUp), ...conjugations.cards],
     conjugations.claims,
-    partlyCarded,
-    itemWordIds,
+    foldedCardId,
   );
   const counts = { vocabCards, conjugationCards: insertedConjugations };
   if (updatedCards > 0) return { word, status: 'updated', ...counts };

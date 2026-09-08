@@ -1,6 +1,5 @@
-import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { createClient, type Client } from "@libsql/client";
+import { readMigrationFiles } from "drizzle-orm/migrator";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import type { WordInfo } from "@/lib/types";
 import { applyMigrations, createDb, type Db } from "./index";
@@ -41,6 +40,22 @@ const pattern: typeof conjugationPatterns.$inferInsert = {
 let client: Client;
 let db: Db;
 
+async function useEarlierMigrations(count: number) {
+  client.close();
+  client = createClient({ url: ":memory:" });
+  db = createDb(client);
+  await client.execute(`CREATE TABLE __drizzle_migrations (
+    id SERIAL PRIMARY KEY, hash text NOT NULL, created_at numeric
+  )`);
+  for (const migration of readMigrationFiles({ migrationsFolder: "drizzle" }).slice(0, count)) {
+    for (const statement of migration.sql) await client.execute(statement);
+    await client.execute({
+      sql: "INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)",
+      args: [migration.hash, migration.folderMillis],
+    });
+  }
+}
+
 beforeEach(async () => {
   client = createClient({ url: ":memory:" });
   db = createDb(client);
@@ -57,17 +72,44 @@ afterEach(() => {
 test("round-trips JSON text, millisecond timestamps, generated IDs, and nullable send fields", async () => {
   expect(await db.select().from(words)).toEqual([{ id: 1, ...word }]);
   expect(await db.select().from(cards)).toEqual([
-    { id: 1, ...card, ankiNoteId: null, sentAt: null, declinedAt: null },
+    { id: 1, ...card, forms: null, ankiNoteId: null, sentAt: null, declinedAt: null },
   ]);
   expect(await db.select().from(conjugationPatterns)).toEqual([
     { id: 1, ...pattern },
   ]);
   await db.update(cards).set({ ankiNoteId: 123_456, sentAt: timestamp + 1 });
   expect(await db.select().from(cards)).toEqual([
-    { id: 1, ...card, ankiNoteId: 123_456, sentAt: timestamp + 1, declinedAt: null },
+    { id: 1, ...card, forms: null, ankiNoteId: 123_456, sentAt: timestamp + 1, declinedAt: null },
   ]);
   const stored = await client.execute("SELECT looked_up_at, info FROM words");
   expect(stored.rows).toEqual([{ looked_up_at: timestamp, info: word.info }]);
+});
+
+test("migrates cards with a nullable JSON text forms column and no default", async () => {
+  expect((await client.execute("PRAGMA table_info(cards)")).rows).toContainEqual(
+    expect.objectContaining({ name: "forms", type: "TEXT", notnull: 0, dflt_value: null, pk: 0 }),
+  );
+});
+
+test("adds forms to an existing card as null without rewriting its stored fields", async () => {
+  await useEarlierMigrations(3);
+  await db.insert(words).values(word);
+  await client.execute({
+    sql: `INSERT INTO cards
+      (id, word_id, deck, kind, front, back, tags, anki_note_id, sent_at, declined_at, created_at)
+      VALUES (41, 1, 'Spanish::Conjugation', 'conjugation', 'hablar: yo, present', 'hablo',
+        '["verb","present"]', 123456, ?, NULL, ?)`,
+    args: [timestamp + 1, timestamp],
+  });
+  await client.execute(`CREATE TRIGGER reject_card_update BEFORE UPDATE ON cards
+    BEGIN SELECT RAISE(ABORT, 'unexpected legacy card rewrite'); END`);
+
+  await applyMigrations(db);
+
+  expect(await db.select().from(cards)).toEqual([
+    { id: 41, ...card, forms: null, ankiNoteId: 123_456, sentAt: timestamp + 1, declinedAt: null },
+  ]);
+  expect((await client.execute("SELECT forms FROM cards")).rows).toEqual([{ forms: null }]);
 });
 
 test("reapplying migrations preserves stored rows and records each migration once", async () => {
@@ -77,29 +119,28 @@ test("reapplying migrations preserves stored rows and records each migration onc
   expect(await db.select().from(conjugationPatterns)).toHaveLength(1);
   expect(
     (await client.execute("SELECT * FROM __drizzle_migrations")).rows,
-  ).toHaveLength(3);
+  ).toHaveLength(4);
 });
 
 test("backfills old-style declines without changing sent or pending cards", async () => {
-  await db.update(cards).set({ sentAt: timestamp + 1 });
-  await db.insert(cards).values([
-    { ...card, front: "sent", ankiNoteId: 123_456, sentAt: timestamp + 2 },
-    { ...card, front: "pending" },
-  ]);
-  const before = await db.select().from(cards).orderBy(cards.id);
-  const backfillHash = createHash("sha256")
-    .update(readFileSync("drizzle/0002_backfill_declined.sql"))
-    .digest("hex");
+  await useEarlierMigrations(2);
+  await db.insert(words).values(word);
   await client.execute({
-    sql: "DELETE FROM __drizzle_migrations WHERE hash = ?",
-    args: [backfillHash],
+    sql: `INSERT INTO cards (word_id, deck, kind, front, back, tags, anki_note_id, sent_at, created_at)
+      VALUES (1, 'Spanish::Conjugation', 'conjugation', 'hablar: yo, present', 'hablo',
+        '["verb","present"]', NULL, ?, ?),
+      (1, 'Spanish::Conjugation', 'conjugation', 'sent', 'hablo', '["verb","present"]', 123456, ?, ?),
+      (1, 'Spanish::Conjugation', 'conjugation', 'pending', 'hablo', '["verb","present"]', NULL, NULL, ?)`,
+    args: [timestamp + 1, timestamp, timestamp + 2, timestamp, timestamp],
   });
 
   await applyMigrations(db);
 
-  expect(await db.select().from(cards).orderBy(cards.id)).toEqual(before.map((row) => (
-    row.id === 1 ? { ...row, sentAt: null, declinedAt: timestamp + 1 } : row
-  )));
+  expect(await db.select().from(cards).orderBy(cards.id)).toEqual([
+    { id: 1, ...card, forms: null, ankiNoteId: null, sentAt: null, declinedAt: timestamp + 1 },
+    { id: 2, ...card, front: "sent", forms: null, ankiNoteId: 123_456, sentAt: timestamp + 2, declinedAt: null },
+    { id: 3, ...card, front: "pending", forms: null, ankiNoteId: null, sentAt: null, declinedAt: null },
+  ]);
 });
 
 test("rejects a duplicate normalized word query", async () => {

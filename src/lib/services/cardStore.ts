@@ -1,7 +1,8 @@
-import { and, inArray, ne } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import type { Db } from '@/server/db';
 import { cards as storedCards, conjugationPatterns } from '@/server/db/schema';
 import type { GeneratedCard } from './cardGenerator';
+import { normalizeQuery } from './lookupCache';
 
 type PatternClaim = Pick<typeof conjugationPatterns.$inferInsert, 'ending' | 'pattern' | 'tense'>;
 
@@ -34,27 +35,40 @@ export async function cardedPatternKeys(db: Db): Promise<Set<string>> {
 }
 
 async function storeCard(
-  db: Pick<Db, 'insert'>,
+  db: Pick<Db, 'insert' | 'select' | 'update'>,
   wordId: number,
   { forms, ...card }: GeneratedCard,
-  partlyCarded: boolean,
-  itemWordIds: readonly number[],
+  foldedCardId: number | undefined,
 ): Promise<{ inserted: { id: number }[]; updatedCards: number }> {
-  const values = { ...card, wordId, tags: JSON.stringify(card.tags), createdAt: Date.now() };
+  if (foldedCardId !== undefined && card.kind === 'basic' && forms && forms.length > 1) {
+    const stored = await db.select({ back: storedCards.back, forms: storedCards.forms }).from(storedCards)
+      .where(eq(storedCards.id, foldedCardId)).get();
+    if (!stored) {
+      throw new Error(`Card ${foldedCardId} read returned 0 rows; reload the list and retry.`);
+    }
+    const allForms = [...forms];
+    for (const form of stored.forms ?? []) {
+      if (!allForms.some((current) => normalizeQuery(current.query) === normalizeQuery(form.query))) {
+        allForms.push(form);
+      }
+    }
+    const back = allForms.map((form) => form.spanish).join(' / ');
+    if (stored.back === back && JSON.stringify(stored.forms) === JSON.stringify(allForms)) {
+      return { inserted: [], updatedCards: 0 };
+    }
+    const updated = await db.update(storedCards).set({ back, forms: allForms })
+      .where(eq(storedCards.id, foldedCardId)).returning({ id: storedCards.id });
+    if (updated.length === 0) {
+      throw new Error(`Card ${foldedCardId} update returned ${updated.length} rows; reload the list and retry.`);
+    }
+    return { inserted: [], updatedCards: updated.length };
+  }
+
+  const values = { ...card, forms, wordId, tags: JSON.stringify(card.tags), createdAt: Date.now() };
   const target = [storedCards.deck, storedCards.front];
   const inserted = await db.insert(storedCards).values(values)
     .onConflictDoNothing({ target }).returning({ id: storedCards.id });
-  if (inserted.length > 0 || !partlyCarded || !forms || forms.length <= 1) {
-    return { inserted, updatedCards: 0 };
-  }
-
-  // The transaction retains the conflicting row, so these returned rows are updates only.
-  const updated = await db.insert(storedCards).values(values).onConflictDoUpdate({
-    target,
-    set: { back: card.back },
-    setWhere: and(inArray(storedCards.wordId, itemWordIds), ne(storedCards.back, card.back)),
-  }).returning({ id: storedCards.id });
-  return { inserted, updatedCards: updated.length };
+  return { inserted, updatedCards: 0 };
 }
 
 export async function storeCards(
@@ -62,8 +76,7 @@ export async function storeCards(
   wordId: number,
   cards: readonly GeneratedCard[],
   claims: readonly { front: string; key: string }[],
-  partlyCarded: boolean,
-  itemWordIds: readonly number[],
+  foldedCardId?: number,
 ): Promise<{ vocabCards: number; conjugationCards: number; updatedCards: number }> {
   const patternsByFront = new Map(claims.map(({ front, key }) => [front, parsePatternKey(key)]));
 
@@ -71,7 +84,7 @@ export async function storeCards(
     const counts = { vocabCards: 0, conjugationCards: 0, updatedCards: 0 };
 
     for (const card of cards) {
-      const { inserted, updatedCards } = await storeCard(tx, wordId, card, partlyCarded, itemWordIds);
+      const { inserted, updatedCards } = await storeCard(tx, wordId, card, foldedCardId);
       counts.updatedCards += updatedCards;
       if (inserted.length === 0) continue;
       if (card.kind !== 'conjugation') {

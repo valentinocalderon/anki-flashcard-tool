@@ -24,6 +24,7 @@ export const cards = sqliteTable(
     front: text("front").notNull(),
     back: text("back").notNull(),
     tags: text("tags").notNull(),
+    forms: text("forms", { mode: "json" }).$type<{ spanish: string; query: string }[]>(),
     ankiNoteId: integer("anki_note_id"),
     sentAt: integer("sent_at"),
     declinedAt: integer("declined_at"),
