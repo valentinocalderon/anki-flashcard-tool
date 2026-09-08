@@ -30,7 +30,7 @@ const supportedWordInfoSchema = z.object({
   spanish: z.string(),
   gender: z.string().nullable(),
   article: z.string().nullable(),
-  type: z.string(),
+  type: z.string().nullable(),
   example: z.string().nullable(),
   exampleWord: z.string().nullable().optional(),
   conjugations: z

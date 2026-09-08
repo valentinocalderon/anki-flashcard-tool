@@ -98,6 +98,33 @@ test('generation stores cards from a supported OpenAI response with null error',
   expect(createCompletion).toHaveBeenCalledOnce();
 });
 
+test('the live Diecinueve payload with null type stores cards and serves the next lookup from cache', async () => {
+  const payload = {
+    english: 'Nineteen', spanish: 'Diecinueve', gender: null, article: null, type: null,
+    example: 'Hoy es el diecinueve de septiembre. (Today is the nineteenth of September.)',
+    exampleWord: null, conjugations: null, conjugationClass: null, error: null,
+  };
+  respondWith(payload);
+
+  const result = await generateForWords(db, 'Diecinueve', openaiLookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  expect(result.results).toEqual([{ word: 'Diecinueve', status: 'added', vocabCards: 2, conjugationCards: 0 }]);
+  expect(await db.select({ kind: cards.kind, front: cards.front, back: cards.back }).from(cards).orderBy(cards.id)).toEqual([
+    { kind: 'basic', front: 'Nineteen', back: 'Diecinueve' },
+    {
+      kind: 'example', front: 'Hoy es el ____ de septiembre.',
+      back: 'Diecinueve (Nineteen)<br>(Today is the nineteenth of September.)',
+    },
+  ]);
+  expect(await db.select({ query: words.query, info: words.info }).from(words)).toEqual([
+    { query: 'diecinueve', info: JSON.stringify(payload) },
+  ]);
+  expect(createCompletion).toHaveBeenCalledOnce();
+
+  expect(await cachedLookup(db, 'Diecinueve', openaiLookup)).toEqual(payload);
+  expect(createCompletion).toHaveBeenCalledOnce();
+});
+
 test('an unsupported OpenAI payload with null fields yields one result line with the model message', async () => {
   respondWith(unsupported);
 
@@ -151,9 +178,28 @@ test('the lookup prompt requires null error for supported words and never omissi
   expect(prompt).not.toContain("don't include this field");
 });
 
-test.each(['english', 'spanish', 'type'])(
+test('a null type is accepted in a supported lookup', () => {
+  const payload = { ...supported, type: null };
+
+  expect(WordInfoSchema.safeParse(payload).success).toBe(true);
+});
+
+test.each(['english', 'spanish'])(
   'a null error cannot turn a null %s into a successful lookup', (field) => {
     expect(WordInfoSchema.safeParse({ ...supported, [field]: null }).success).toBe(false);
+  },
+);
+
+test('a supported lookup still requires the type key', () => {
+  const payload: Record<string, unknown> = { ...supported };
+  delete payload.type;
+
+  expect(WordInfoSchema.safeParse(payload).success).toBe(false);
+});
+
+test.each([{ type: 42 }, { type: true }, { type: {} }, { type: [] }])(
+  'a supported lookup rejects a non-string non-null type: $type', ({ type }) => {
+    expect(WordInfoSchema.safeParse({ ...supported, type }).success).toBe(false);
   },
 );
 
