@@ -5,7 +5,7 @@ import type { WordInfo, WordResult } from '@/lib/types';
 import type { Db } from '@/server/db';
 import { cards, words } from '@/server/db/schema';
 import { askForJson } from './aiLookup';
-import { fetchPackEvents, fetchPackSetEvents, isPackSetUrl, isPackUrl } from './brainscapePack';
+import { brainscapeUrls, fetchPastedEvents } from './brainscapePack';
 import { spanishSideItems, type BrainscapeItem } from './brainscapeSides';
 import { cardAudio } from './cardAudio';
 import { conjugationCards, generateCards, type GeneratedCard, type LookedUpItem } from './cardGenerator';
@@ -48,17 +48,17 @@ async function* inputItems(
   fetchImpl: typeof fetch,
   results: WordResult[],
 ): AsyncGenerator<GenerationEvent, readonly InputItem[]> {
-  const packEvents = isPackUrl(text) ? fetchPackEvents(text.trim(), fetchImpl)
-    : isPackSetUrl(text) ? fetchPackSetEvents(text.trim(), fetchImpl) : null;
-  if (packEvents === null) {
+  const urls = brainscapeUrls(text);
+  if (urls === null) {
     return (await resolveWordList(text, ask)).map((spanish) => ({
       forms: [{ spanish, query: normalizeQuery(spanish) }],
     }));
   }
 
   const sides: { side: string; source: string }[] = [];
-  for await (const event of packEvents) {
+  for await (const event of fetchPastedEvents(urls, fetchImpl)) {
     if ('links' in event) yield event;
+    else if ('error' in event) results.push(errorResult(event.url, event.error));
     else {
       sides.push(...event.sides.map((side) => ({ side, source: event.link })));
       yield { link: event.link, title: event.title };

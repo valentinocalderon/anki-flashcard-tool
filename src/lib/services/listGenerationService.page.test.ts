@@ -461,7 +461,7 @@ test('the page labels deck and deck set URLs and renders a bare Deck 1 heading',
   await page.generation.run;
 
   expect.soft(/<label[^>]*>(.*?)<\/label>/.exec(page.html())?.[1]).toBe(
-    'Words: lines, commas or a sentence; a Brainscape deck URL alone runs that deck, a deck set URL runs every deck in it',
+    'Words: lines, commas or a sentence; Brainscape deck and deck set URLs may be pasted together, one per line; a deck URL runs its deck, a deck set URL runs every deck in it',
   );
   expect.soft(resultGroups(page.html())).toEqual([{ heading: 'Deck 1', words: [], tally: undefined }]);
 });

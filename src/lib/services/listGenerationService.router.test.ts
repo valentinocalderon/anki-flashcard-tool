@@ -8,9 +8,11 @@ import { cards, words } from '@/server/db/schema';
 import { openaiLookup } from './aiLookup';
 import * as ankiSender from './ankiSender';
 import * as audioBackfill from './audioBackfill';
+import * as brainscapePack from './brainscapePack';
 import { storeCards } from './cardStore';
 import * as listGeneration from './listGenerationService';
 import * as spanishVoice from './spanishVoice';
+import * as wordListParser from './wordListParser';
 
 vi.mock('@/env', () => ({ env: {
   OPENAI_API_KEY: 'test-key', ELEVENLABS_API_KEY: 'test-api-key', ELEVENLABS_VOICE_ID: 'test-voice-id',
@@ -37,7 +39,7 @@ beforeEach(async () => {
     throw new Error('Unexpected fetch; provide a fixture response.');
   });
   vi.stubGlobal('fetch', fetchImpl);
-  vi.mocked(openaiLookup).mockClear();
+  vi.mocked(openaiLookup).mockReset().mockRejectedValue(new Error('Unexpected live lookup'));
   client = createClient({ url: ':memory:' });
   db = database.createDb(client);
   await database.applyMigrations(db);
@@ -47,13 +49,25 @@ beforeEach(async () => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   client.close();
 });
 
-async function generationReport(request: ReturnType<ReturnType<typeof ankiRouter.createCaller>['generateFromList']>) {
+async function generationEvents(request: ReturnType<ReturnType<typeof ankiRouter.createCaller>['generateFromList']>) {
   const events = [];
   for await (const event of await request) events.push(event);
-  return events.at(-1);
+  return events;
+}
+
+async function generationReport(request: ReturnType<ReturnType<typeof ankiRouter.createCaller>['generateFromList']>) {
+  return (await generationEvents(request)).at(-1);
+}
+
+function deckHtml(link: string, side: string, title: string | null = null) {
+  return `<a href='${link}'>${title === null ? 'Deck' : `<div class='deck-item-title'>${title}</div>`}</a>
+    <div id='card-back-1' class='flashcard-contents answer-contents'>
+      <div class='preview-html'><div class='scf-face'>${side}</div></div>
+    </div>`;
 }
 
 test('the router streams every service event in order and yields the send and backfill report last', async () => {
@@ -102,19 +116,221 @@ test('the router streams every service event in order and yields the send and ba
   expect(fetchImpl).not.toHaveBeenCalled();
 });
 
-test('the router streams a pack request failure without sending or backfilling', async () => {
+test('the router reports a lone pasted URL failure as one error line without throwing', async () => {
   fetchImpl.mockResolvedValueOnce(new Response('unavailable', { status: 503, statusText: 'Service Unavailable' }));
   const send = vi.spyOn(ankiSender, 'sendPending');
   const backfill = vi.spyOn(audioBackfill, 'backfillSentAudio');
   const caller = ankiRouter.createCaller({ headers: new Headers() });
-  const events = await caller.generateFromList({ text: 'https://www.brainscape.com/packs/21648778' });
+  const events = await generationEvents(caller.generateFromList({ text: 'https://www.brainscape.com/packs/21648778' }));
+  const result = {
+    word: 'https://www.brainscape.com/packs/21648778', status: 'error', vocabCards: 0, conjugationCards: 0,
+    message: 'Brainscape request for https://www.brainscape.com/packs/21648778 returned HTTP 503 Service Unavailable; check the response and retry.',
+  };
 
-  await expect(events.next()).rejects.toThrow(
-    'Brainscape request for https://www.brainscape.com/packs/21648778 returned HTTP 503 Service Unavailable; check the response and retry.',
-  );
-  expect(send).not.toHaveBeenCalled();
-  expect(backfill).not.toHaveBeenCalled();
+  expect(events).toEqual([
+    { links: [] },
+    { result },
+    { results: [result], capReached: false, audio: { unspeakable: 0, message: null } },
+    { results: [result], capReached: false, audio: { unspeakable: 0, message: null },
+      send: { status: 'nothing', sent: 0, rejected: 0, pending: 0, syncedAt: null, message: null },
+      backfill: { status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null } },
+  ]);
+  expect(send).toHaveBeenCalledOnce();
+  expect(backfill).toHaveBeenCalledOnce();
+  expect(openaiLookup).not.toHaveBeenCalled();
   expect(fetchImpl).toHaveBeenCalledOnce();
+  expect(await db.select().from(words)).toEqual([]);
+  expect(await db.select().from(cards)).toEqual([]);
+});
+
+test('the router streams one combined links event and each deck for two pasted URLs', async () => {
+  vi.useFakeTimers();
+  fetchImpl
+    .mockResolvedValueOnce(new Response(deckHtml('/flashcards/yes/packs/42', 'sí', 'Yes')))
+    .mockResolvedValueOnce(new Response(`<link rel='canonical' href='/packs/43'>
+      <a href='/flashcards/house/packs/43'>House</a>`))
+    .mockResolvedValueOnce(new Response(deckHtml('/flashcards/house/packs/43', 'casa')));
+  vi.mocked(openaiLookup).mockResolvedValueOnce(wordInfo)
+    .mockResolvedValueOnce({ ...wordInfo, spanish: 'casa', english: 'house' });
+  vi.spyOn(ankiSender, 'sendPending').mockResolvedValueOnce({
+    status: 'sent', sent: 2, rejected: 0, pending: 0, syncedAt: 123, message: null,
+  });
+  const pasted = vi.spyOn(brainscapePack, 'fetchPastedEvents');
+  const parseList = vi.spyOn(wordListParser, 'resolveWordList');
+  const caller = ankiRouter.createCaller({ headers: new Headers() });
+  const run = generationEvents(caller.generateFromList({
+    text: 'https://www.brainscape.com/flashcards/yes/packs/42\nhttps://www.brainscape.com/p/house-set',
+  }));
+  const results = [
+    { word: 'sí', status: 'added', vocabCards: 1, conjugationCards: 0, source: '/flashcards/yes/packs/42' },
+    { word: 'casa', status: 'added', vocabCards: 1, conjugationCards: 0, source: '/flashcards/house/packs/43' },
+  ];
+  const assertion = expect(run).resolves.toEqual([
+    { links: ['/flashcards/yes/packs/42', '/flashcards/house/packs/43'] },
+    { link: '/flashcards/yes/packs/42', title: 'Yes' },
+    { link: '/flashcards/house/packs/43', title: null },
+    { result: results[0] }, { result: results[1] },
+    { results, capReached: false, audio: { unspeakable: 0, message: null } },
+    { results, capReached: false, audio: { unspeakable: 0, message: null },
+      send: { status: 'sent', sent: 2, rejected: 0, pending: 0, syncedAt: 123, message: null },
+      backfill: { status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null } },
+  ]);
+  await Promise.all([assertion, vi.runAllTimersAsync()]);
+  expect(pasted).toHaveBeenCalledExactlyOnceWith([
+    'https://www.brainscape.com/flashcards/yes/packs/42', 'https://www.brainscape.com/p/house-set',
+  ], fetchImpl);
+  expect(parseList).not.toHaveBeenCalled();
+  expect(vi.mocked(openaiLookup).mock.calls).toEqual([['sí'], ['casa']]);
+  expect(fetchImpl.mock.calls.filter(([, init]) => init?.method !== 'POST').map(([url]) => url)).toEqual([
+    'https://www.brainscape.com/flashcards/yes/packs/42', 'https://www.brainscape.com/p/house-set',
+    'https://www.brainscape.com/flashcards/house/packs/43',
+  ]);
+  expect(await db.select({ front: cards.front }).from(cards).orderBy(cards.id)).toEqual([
+    { front: 'yes' }, { front: 'house' },
+  ]);
+});
+
+test('the router dedupes the same Spanish side across two pasted deck URLs', async () => {
+  vi.useFakeTimers();
+  fetchImpl
+    .mockResolvedValueOnce(new Response(deckHtml('/flashcards/yes/packs/42', 'sí', 'Yes')))
+    .mockResolvedValueOnce(new Response(deckHtml('/flashcards/affirmative/packs/43', 'sí', 'Affirmative')));
+  vi.mocked(openaiLookup).mockResolvedValueOnce(wordInfo);
+  vi.spyOn(ankiSender, 'sendPending').mockResolvedValueOnce({
+    status: 'sent', sent: 1, rejected: 0, pending: 0, syncedAt: 123, message: null,
+  });
+  const caller = ankiRouter.createCaller({ headers: new Headers() });
+  const run = generationEvents(caller.generateFromList({
+    text: 'https://www.brainscape.com/flashcards/yes/packs/42\nhttps://www.brainscape.com/flashcards/affirmative/packs/43',
+  }));
+  const [events] = await Promise.all([run, vi.runAllTimersAsync()]);
+  const results = [
+    { word: 'sí', status: 'added', vocabCards: 1, conjugationCards: 0, source: '/flashcards/yes/packs/42' },
+    { word: 'sí', status: 'duplicate', vocabCards: 0, conjugationCards: 0, source: '/flashcards/affirmative/packs/43' },
+  ];
+
+  expect(events.filter((event) => 'result' in event)).toEqual([{ result: results[0] }, { result: results[1] }]);
+  expect(events).toEqual([
+    { links: ['/flashcards/yes/packs/42', '/flashcards/affirmative/packs/43'] },
+    { link: '/flashcards/yes/packs/42', title: 'Yes' },
+    { link: '/flashcards/affirmative/packs/43', title: 'Affirmative' },
+    { result: results[0] }, { result: results[1] },
+    { results, capReached: false, audio: { unspeakable: 0, message: null } },
+    { results, capReached: false, audio: { unspeakable: 0, message: null },
+      send: { status: 'sent', sent: 1, rejected: 0, pending: 0, syncedAt: 123, message: null },
+      backfill: { status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null } },
+  ]);
+  expect(vi.mocked(openaiLookup).mock.calls).toEqual([['sí']]);
+  expect(fetchImpl.mock.calls.filter(([, init]) => init?.method !== 'POST').map(([url]) => url)).toEqual([
+    'https://www.brainscape.com/flashcards/yes/packs/42', 'https://www.brainscape.com/flashcards/affirmative/packs/43',
+  ]);
+  expect(await db.select({ front: cards.front }).from(cards).orderBy(cards.id)).toEqual([{ front: 'yes' }]);
+});
+
+test('the router reports a failed pasted URL while retaining its landed deck and running the other URL', async () => {
+  vi.useFakeTimers();
+  fetchImpl
+    .mockResolvedValueOnce(new Response(`<link rel='canonical' href='/packs/42'>
+      <a href='/flashcards/yes/packs/42'>Yes</a>
+      <a href='/flashcards/broken/packs/42'>Broken</a>
+      <a href='/flashcards/unread/packs/42'>Unread</a>`))
+    .mockResolvedValueOnce(new Response(deckHtml('/flashcards/house/packs/43', 'casa')))
+    .mockResolvedValueOnce(new Response(deckHtml('/flashcards/yes/packs/42', 'sí')))
+    .mockResolvedValueOnce(new Response('Unavailable', { status: 503, statusText: 'Service Unavailable' }));
+  vi.mocked(openaiLookup).mockResolvedValueOnce(wordInfo)
+    .mockResolvedValueOnce({ ...wordInfo, spanish: 'casa', english: 'house' });
+  vi.spyOn(ankiSender, 'sendPending').mockResolvedValueOnce({
+    status: 'sent', sent: 2, rejected: 0, pending: 0, syncedAt: 123, message: null,
+  });
+  const caller = ankiRouter.createCaller({ headers: new Headers() });
+  const run = generationEvents(caller.generateFromList({
+    text: 'https://www.brainscape.com/p/broken-set\nhttps://www.brainscape.com/flashcards/house/packs/43',
+  }));
+  const results = [
+    { word: 'https://www.brainscape.com/p/broken-set', status: 'error', vocabCards: 0, conjugationCards: 0,
+      message: 'Brainscape request for https://www.brainscape.com/flashcards/broken/packs/42 returned HTTP 503 Service Unavailable; check the response and retry.' },
+    { word: 'sí', status: 'added', vocabCards: 1, conjugationCards: 0, source: '/flashcards/yes/packs/42' },
+    { word: 'casa', status: 'added', vocabCards: 1, conjugationCards: 0, source: '/flashcards/house/packs/43' },
+  ];
+  const assertion = expect(run).resolves.toEqual([
+    { links: ['/flashcards/yes/packs/42', '/flashcards/broken/packs/42', '/flashcards/unread/packs/42', '/flashcards/house/packs/43'] },
+    { link: '/flashcards/yes/packs/42', title: null },
+    { link: '/flashcards/house/packs/43', title: null },
+    { result: results[0] }, { result: results[1] }, { result: results[2] },
+    { results, capReached: false, audio: { unspeakable: 0, message: null } },
+    { results, capReached: false, audio: { unspeakable: 0, message: null },
+      send: { status: 'sent', sent: 2, rejected: 0, pending: 0, syncedAt: 123, message: null },
+      backfill: { status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null } },
+  ]);
+  await Promise.all([assertion, vi.runAllTimersAsync()]);
+  expect(vi.mocked(openaiLookup).mock.calls).toEqual([['sí'], ['casa']]);
+  expect(fetchImpl.mock.calls.filter(([, init]) => init?.method !== 'POST').map(([url]) => url)).toEqual([
+    'https://www.brainscape.com/p/broken-set', 'https://www.brainscape.com/flashcards/house/packs/43',
+    'https://www.brainscape.com/flashcards/yes/packs/42', 'https://www.brainscape.com/flashcards/broken/packs/42',
+  ]);
+  expect(await db.select({ front: cards.front }).from(cards).orderBy(cards.id)).toEqual([
+    { front: 'yes' }, { front: 'house' },
+  ]);
+});
+
+test('the router still yields links when a pasted URL resolve error arrives first', async () => {
+  vi.useFakeTimers();
+  fetchImpl.mockRejectedValueOnce(new Error('connect ETIMEDOUT'))
+    .mockResolvedValueOnce(new Response(deckHtml('/flashcards/yes/packs/42', 'sí')));
+  vi.mocked(openaiLookup).mockResolvedValueOnce(wordInfo);
+  vi.spyOn(ankiSender, 'sendPending').mockResolvedValueOnce({
+    status: 'sent', sent: 1, rejected: 0, pending: 0, syncedAt: 123, message: null,
+  });
+  const caller = ankiRouter.createCaller({ headers: new Headers() });
+  const request = caller.generateFromList({
+    text: 'https://www.brainscape.com/p/missing\nhttps://www.brainscape.com/flashcards/yes/packs/42',
+  });
+  const [events] = await Promise.all([request, vi.runAllTimersAsync()]);
+  const first = expect(events.next()).resolves.toEqual({
+    done: false, value: { links: ['/flashcards/yes/packs/42'] },
+  });
+  await Promise.all([first, vi.runAllTimersAsync()]);
+  expect(openaiLookup).not.toHaveBeenCalled();
+  expect(await events.next()).toEqual({ done: false, value: { link: '/flashcards/yes/packs/42', title: null } });
+  const error = { word: 'https://www.brainscape.com/p/missing', status: 'error', vocabCards: 0, conjugationCards: 0,
+    message: 'connect ETIMEDOUT' };
+  expect(await events.next()).toEqual({ done: false, value: { result: error } });
+  const result = { word: 'sí', status: 'added', vocabCards: 1, conjugationCards: 0, source: '/flashcards/yes/packs/42' };
+  expect(await events.next()).toEqual({ done: false, value: { result } });
+  expect(await events.next()).toEqual({ done: false, value: {
+    results: [error, result], capReached: false, audio: { unspeakable: 0, message: null },
+  } });
+  expect(await events.next()).toMatchObject({ done: false, value: { results: [error, result] } });
+  expect(await events.next()).toEqual({ done: true, value: undefined });
+  expect(vi.mocked(openaiLookup).mock.calls).toEqual([['sí']]);
+});
+
+test('the router keeps a pure word list on resolveWordList without reading a page', async () => {
+  const parseList = vi.spyOn(wordListParser, 'resolveWordList');
+  const pasted = vi.spyOn(brainscapePack, 'fetchPastedEvents');
+  vi.mocked(openaiLookup).mockResolvedValueOnce(wordInfo)
+    .mockResolvedValueOnce({ ...wordInfo, spanish: 'casa', english: 'house' });
+  vi.spyOn(ankiSender, 'sendPending').mockResolvedValueOnce({
+    status: 'sent', sent: 2, rejected: 0, pending: 0, syncedAt: 123, message: null,
+  });
+  const caller = ankiRouter.createCaller({ headers: new Headers() });
+  const events = await generationEvents(caller.generateFromList({ text: ' sí\ncasa; SÍ ' }));
+
+  expect(parseList).toHaveBeenCalledExactlyOnceWith(' sí\ncasa; SÍ ', expect.any(Function));
+  expect(pasted).not.toHaveBeenCalled();
+  expect(vi.mocked(openaiLookup).mock.calls).toEqual([['sí'], ['casa']]);
+  expect(events.slice(0, -1)).toEqual([
+    { result: { word: 'sí', status: 'added', vocabCards: 1, conjugationCards: 0 } },
+    { result: { word: 'casa', status: 'added', vocabCards: 1, conjugationCards: 0 } },
+    { results: [
+      { word: 'sí', status: 'added', vocabCards: 1, conjugationCards: 0 },
+      { word: 'casa', status: 'added', vocabCards: 1, conjugationCards: 0 },
+    ], capReached: false, audio: { unspeakable: 0, message: null } },
+  ]);
+  expect(fetchImpl.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
+    ['https://api.elevenlabs.io/v1/text-to-speech/test-voice-id?output_format=mp3_44100_128', 'POST'],
+    ['https://api.elevenlabs.io/v1/text-to-speech/test-voice-id?output_format=mp3_44100_128', 'POST'],
+  ]);
 });
 
 test('the router builds one voice per request and shares its budget across all generated items', async () => {
