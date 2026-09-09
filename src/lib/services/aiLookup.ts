@@ -1,9 +1,15 @@
 import { env } from '@/env';
 import { loadConfig } from '@/lib/config';
 import type { WordInfo } from '@/lib/types';
-import { WordInfoSchema } from '@/lib/types';
+import { WordInfoSchema, wordInfoIssues } from '@/lib/types';
 import OpenAI from 'openai';
 import { ZodError, type z } from 'zod';
+
+function shapeMismatchError(error: ZodError, issues = error.issues): Error {
+  return new Error(`AI response did not match the expected shape: ${JSON.stringify(issues)}`, {
+    cause: error,
+  });
+}
 
 export async function askForJson<T>(prompt: string, schema: z.ZodType<T>, client: OpenAI): Promise<T> {
   const config = loadConfig();
@@ -38,9 +44,7 @@ export async function askForJson<T>(prompt: string, schema: z.ZodType<T>, client
   } catch (error) {
     if (!(error instanceof ZodError)) throw error;
     console.error('❌ AI response did not match the expected shape:', error.issues, raw);
-    throw new Error(`AI response did not match the expected shape: ${JSON.stringify(error.issues)}`, {
-      cause: error,
-    });
+    throw shapeMismatchError(error);
   }
 }
 
@@ -64,5 +68,12 @@ You are a bilingual linguist AI specialized in Spanish and English. Given the wo
 Return ONLY a JSON object with no preamble or explanation.
 `;
 
-  return askForJson(prompt, WordInfoSchema, client);
+  try {
+    return await askForJson(prompt, WordInfoSchema, client);
+  } catch (error) {
+    if (error instanceof Error && error.cause instanceof ZodError) {
+      throw shapeMismatchError(error.cause, wordInfoIssues(error.cause));
+    }
+    throw error;
+  }
 }

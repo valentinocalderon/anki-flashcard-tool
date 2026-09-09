@@ -1,6 +1,7 @@
 import { createClient, type Client } from '@libsql/client';
 import type OpenAI from 'openai';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { ZodError } from 'zod';
 import { loadConfig } from '@/lib/config';
 import { formatResultLine } from '@/lib/resultLine';
 import { WordInfoSchema, type WordInfo } from '@/lib/types';
@@ -83,6 +84,63 @@ test('a supported lookup with explicit null error parses and generates string ca
   ] })).toEqual([{ ...houseCard, back: 'casa / casita', forms: [
     { spanish: 'casa', query: 'casa' }, { spanish: 'casita', query: 'casita' },
   ] }]);
+});
+
+test('a supported-shaped reply with a string error parses through the error branch', () => {
+  const payload = { ...supported, error: 'Unsupported word: bonjour is not English or Spanish.' };
+
+  expect(WordInfoSchema.parse(payload)).toEqual(payload);
+
+  const missingConjugations: Record<string, unknown> = { ...payload };
+  delete missingConjugations.conjugations;
+  expect(WordInfoSchema.parse(missingConjugations)).toEqual(missingConjugations);
+});
+
+test('a supported reply missing conjugations reports only the supported branch', async () => {
+  const payload: Record<string, unknown> = { ...supported };
+  delete payload.conjugations;
+  respondWith(payload);
+
+  const answer = openaiLookup('casa');
+
+  await expect(answer).rejects.toHaveProperty('message',
+    'AI response did not match the expected shape: [{"code":"invalid_type","expected":"object","received":"undefined","path":["conjugations"],"message":"Required"}]',
+  );
+  await expect(answer).rejects.not.toHaveProperty('message', expect.stringContaining('"error"'));
+  await expect(answer).rejects.toHaveProperty('cause', expect.any(ZodError));
+  expect(console.error).toHaveBeenCalledOnce();
+});
+
+test('an error reply with numeric english reports only the error branch', async () => {
+  respondWith({ error: 'Unsupported word: bonjour is not English or Spanish.', english: 42 });
+
+  const answer = openaiLookup('bonjour');
+
+  await expect(answer).rejects.toHaveProperty('message',
+    'AI response did not match the expected shape: [{"code":"invalid_type","expected":"string","received":"number","path":["english"],"message":"Expected string, received number"}]',
+  );
+  await expect(answer).rejects.not.toHaveProperty('message', expect.stringContaining('spanish'));
+  await expect(answer).rejects.not.toHaveProperty('message', expect.stringContaining('conjugations'));
+  await expect(answer).rejects.toHaveProperty('cause', expect.any(ZodError));
+  expect(console.error).toHaveBeenCalledOnce();
+});
+
+test('a reply with numeric error preserves both branches exactly', async () => {
+  respondWith({ ...supported, error: 42 });
+
+  await expect(openaiLookup('casa')).rejects.toHaveProperty('message',
+    'AI response did not match the expected shape: [{"code":"invalid_union","unionErrors":[{"issues":[{"code":"invalid_type","expected":"null","received":"number","path":["error"],"message":"Expected null, received number"}],"name":"ZodError"},{"issues":[{"code":"invalid_type","expected":"string","received":"number","path":["error"],"message":"Expected string, received number"}],"name":"ZodError"}],"path":[],"message":"Invalid input"}]',
+  );
+  expect(console.error).toHaveBeenCalledOnce();
+});
+
+test('a non-object reply preserves both branches exactly', async () => {
+  respondWith(null);
+
+  await expect(openaiLookup('casa')).rejects.toHaveProperty('message',
+    'AI response did not match the expected shape: [{"code":"invalid_union","unionErrors":[{"issues":[{"code":"invalid_type","expected":"object","received":"null","path":[],"message":"Expected object, received null"}],"name":"ZodError"},{"issues":[{"code":"invalid_type","expected":"object","received":"null","path":[],"message":"Expected object, received null"}],"name":"ZodError"}],"path":[],"message":"Invalid input"}]',
+  );
+  expect(console.error).toHaveBeenCalledOnce();
 });
 
 test('generation stores cards from a supported OpenAI response with null error', async () => {

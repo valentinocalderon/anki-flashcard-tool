@@ -584,14 +584,33 @@ test.each(['{', '', null])(
   },
 );
 
-test('lookup reports shape failures with the zod issues', async () => {
+test('lookup reports shape failures with only the supported branch zod issues', async () => {
   const invalidWord = { ...regularVerb, spanish: 123, conjugationClass: { ending: 're' } };
-  const validation = WordInfoSchema.safeParse(invalidWord);
-  if (validation.success) throw new Error('Expected the invalid word fixture to fail validation');
+  const issues = [
+    {
+      code: 'invalid_type', expected: 'string', received: 'number', path: ['spanish'],
+      message: 'Expected string, received number',
+    },
+    {
+      received: 're', code: 'invalid_enum_value', options: ['ar', 'er', 'ir'],
+      path: ['conjugationClass', 'ending'],
+      message: "Invalid enum value. Expected 'ar' | 'er' | 'ir', received 're'",
+    },
+    {
+      expected: "'regular' | 'e-ie' | 'o-ue' | 'e-i' | 'u-ue' | 'irregular'",
+      received: 'undefined', code: 'invalid_type',
+      path: ['conjugationClass', 'present'], message: 'Required',
+    },
+    {
+      expected: "'regular' | 'e-ie' | 'o-ue' | 'e-i' | 'u-ue' | 'irregular'",
+      received: 'undefined', code: 'invalid_type',
+      path: ['conjugationClass', 'preterite'], message: 'Required',
+    },
+  ];
   createCompletion.mockResolvedValueOnce({
     choices: [{ message: { content: JSON.stringify(invalidWord) } }],
   });
-  await expect(openaiLookup('hablar')).rejects.toThrow(
-    `AI response did not match the expected shape: ${JSON.stringify(validation.error.issues)}`,
+  await expect(openaiLookup('hablar')).rejects.toHaveProperty('message',
+    `AI response did not match the expected shape: ${JSON.stringify(issues)}`,
   );
 });

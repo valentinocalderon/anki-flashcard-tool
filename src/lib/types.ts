@@ -55,6 +55,19 @@ export const WordInfoSchema = z.union([
   }).partial({ gender: true, article: true, example: true, conjugations: true }),
 ]);
 
+export function wordInfoIssues(error: z.ZodError): z.ZodIssue[] {
+  const [issue] = error.issues;
+  if (error.issues.length !== 1 || issue?.code !== 'invalid_union' || issue.path.length !== 0) {
+    return error.issues;
+  }
+
+  const branches = issue.unionErrors.filter((branch) => !branch.issues.some(
+    (branchIssue) => branchIssue.path.length === 1 && branchIssue.path[0] === 'error',
+  ));
+  const [branch] = branches;
+  return branches.length === 1 && branch ? branch.issues : error.issues;
+}
+
 export type WordInfo = z.infer<typeof WordInfoSchema>;
 
 export const CardSchema = z.object({
