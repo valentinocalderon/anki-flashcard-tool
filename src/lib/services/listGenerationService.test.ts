@@ -277,6 +277,82 @@ afterEach(() => {
   expect(askForJson).not.toHaveBeenCalled();
 });
 
+test.each([
+  'https://www.brainscape.com/packs/21882519',
+  'https://www.brainscape.com/packs/level-2-rw-core-lessons-21882519',
+  'https://www.brainscape.com/p/5M6OW-LH-D10NR',
+])('deck-set URL shapes discover and run all sixteen decks: %s', async (url) => {
+  vi.useFakeTimers();
+  fetchImpl.mockResolvedValueOnce(new Response(packSet));
+  for (let deck = 0; deck < 16; deck += 1) fetchImpl.mockResolvedValueOnce(new Response(greetings));
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>();
+  const parseList = vi.spyOn(wordListParser, 'resolveWordList');
+  const events = generateForWordsEvents(db, url, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  expect(await events.next()).toEqual({ done: false, value: { links: packSetLinks } });
+  const decks: GenerationEvent[] = [];
+  for (let deck = 0; deck < 16; deck += 1) {
+    const next = events.next();
+    await vi.advanceTimersByTimeAsync(1000);
+    const event = await next;
+    expect(event.done).toBe(false);
+    decks.push(event.value);
+  }
+  expect(decks).toHaveLength(16);
+  expect(decks).toEqual(packSetLinks.map((link, index) => ({ link, title: packSetTitles[index] })));
+  expect(fetchImpl.mock.calls.map(([requested]) => requested)).toEqual([
+    url, ...packSetLinks.map((link) => `https://www.brainscape.com${link}`),
+  ]);
+  expect(fetchImpl).toHaveBeenCalledTimes(17);
+  expect(parseList).not.toHaveBeenCalled();
+  expect(lookup).not.toHaveBeenCalled();
+  await events.return({ results: [], capReached: false, audio: { unspeakable: 0, message: null } });
+});
+
+test('a pasted deck URL generates only its saved greeting items in one page request', async () => {
+  vi.useFakeTimers();
+  const url = 'https://www.brainscape.com/flashcards/011-common-greetings-14150191/packs/21648778';
+  fetchImpl.mockResolvedValueOnce(new Response(greetings));
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>().mockImplementation(async (word) => ({
+    ...noun, spanish: word, english: word, article: null, example: null,
+  }));
+  const parseList = vi.spyOn(wordListParser, 'resolveWordList');
+  const run = collectGenerationEvents(generateForWordsEvents(
+    db, url, lookup, fetchImpl, createSpanishVoice({ capCharacters: 0 }, fetchImpl),
+  ));
+  const expectedResults = packWords.slice(0, 17).map((word) => ({
+    word, source: '/flashcards/011-common-greetings-14150191/packs/21648778',
+    status: 'added', vocabCards: 1, conjugationCards: 0,
+  }));
+  const assertion = expect(run).resolves.toEqual([
+    { links: ['/flashcards/011-common-greetings-14150191/packs/21648778'] },
+    { link: '/flashcards/011-common-greetings-14150191/packs/21648778', title: null },
+    ...expectedResults.map((result) => ({ result })),
+    { results: expectedResults, capReached: true, audio: { unspeakable: 0, message: null } },
+  ]);
+  await Promise.all([assertion, vi.runAllTimersAsync()]);
+  expect(fetchImpl).toHaveBeenCalledExactlyOnceWith(url, expect.any(Object));
+  expect(lookup.mock.calls.flat()).toEqual(packForms.slice(0, 19));
+  expect(await db.select().from(cards)).toHaveLength(17);
+  expect(parseList).not.toHaveBeenCalled();
+});
+
+test('a pasted deck missing from its page stops generation before lookup or storage', async () => {
+  const url = 'https://www.brainscape.com/flashcards/missing-123/packs/21648778';
+  fetchImpl.mockResolvedValueOnce(new Response(greetings));
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>();
+  const events = generateForWordsEvents(db, url, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  await expect(events.next()).rejects.toThrow(new Error(
+    `Brainscape page ${url} contained 0 deck links matching /flashcards/missing-123/packs/21648778; check the page HTML.`,
+  ));
+  expect((await events.next()).done).toBe(true);
+  expect(fetchImpl).toHaveBeenCalledExactlyOnceWith(url, expect.any(Object));
+  expect(lookup).not.toHaveBeenCalled();
+  expect(await db.select().from(words)).toEqual([]);
+  expect(await db.select().from(cards)).toEqual([]);
+});
+
 test('generation events forward the title from the saved pack-set anchor', async () => {
   vi.useFakeTimers();
   fetchImpl.mockResolvedValueOnce(new Response(packSet)).mockResolvedValueOnce(new Response(greetings));
@@ -430,19 +506,30 @@ test.each(['lookup error', 'lookup string', 'lookup payload', 'voice error'])(
   },
 );
 
-test.each([packUrl, packSetUrl])('generation events propagate discovery failures without a report for %s', async (url) => {
-  fetchImpl.mockResolvedValueOnce(new Response('Denied', { status: 403, statusText: 'Forbidden' }));
-  const lookup = vi.fn<(word: string) => Promise<WordInfo>>();
-  const events = generateForWordsEvents(db, url, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+test.each([packUrl, packSetUrl, singleDeckUrl, 'https://www.brainscape.com/packs/level-2-rw-core-lessons-21882519']
+  .flatMap((url) => ['http', 'request', 'body'].map((failure) => ({ url, failure }))))(
+  'generation events propagate $failure discovery failures without a report for $url', async ({ url, failure }) => {
+    const error = new Error(failure === 'http'
+      ? `Brainscape request for ${url} returned HTTP 403 Forbidden; check the response and retry.`
+      : failure === 'request' ? 'connect ETIMEDOUT' : 'Response body stream terminated');
+    if (failure === 'http') fetchImpl.mockResolvedValueOnce(new Response('Denied', { status: 403, statusText: 'Forbidden' }));
+    else if (failure === 'request') fetchImpl.mockRejectedValueOnce(error);
+    else {
+      const response = new Response();
+      vi.spyOn(response, 'text').mockRejectedValueOnce(error);
+      fetchImpl.mockResolvedValueOnce(response);
+    }
+    const lookup = vi.fn<(word: string) => Promise<WordInfo>>();
+    const events = generateForWordsEvents(db, url, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
 
-  await expect(events.next()).rejects.toThrow(
-    `Brainscape request for ${url} returned HTTP 403 Forbidden; check the response and retry.`,
-  );
-  expect((await events.next()).done).toBe(true);
-  expect(lookup).not.toHaveBeenCalled();
-  expect(await db.select().from(words)).toEqual([]);
-  expect(await db.select().from(cards)).toEqual([]);
-});
+    await expect(events.next()).rejects.toThrow(error);
+    expect((await events.next()).done).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledExactlyOnceWith(url, expect.any(Object));
+    expect(lookup).not.toHaveBeenCalled();
+    expect(await db.select().from(words)).toEqual([]);
+    expect(await db.select().from(cards)).toEqual([]);
+  },
+);
 
 test.each(['request', 'body'])('generation events retain landed deck progress and propagate a later %s failure without results', async (failure) => {
   vi.useFakeTimers();
@@ -578,7 +665,11 @@ test.each([
   expect(vi.getTimerCount()).toBe(0);
 });
 
-test.each([packSetUrl, `${packSetUrl}/`])('routes a lone pack-set URL through the saved decks and shared item path: %s', async (url) => {
+test.each([
+  packSetUrl, `${packSetUrl}/`,
+  'https://www.brainscape.com/packs/21882519',
+  'https://www.brainscape.com/packs/level-2-rw-core-lessons-21882519',
+])('routes a lone pack-set URL through the saved decks and shared item path: %s', async (url) => {
   vi.useFakeTimers();
   fetchImpl.mockResolvedValueOnce(new Response(packSet)).mockResolvedValueOnce(new Response(greetings));
   for (let deck = 0; deck < 15; deck += 1) fetchImpl.mockResolvedValueOnce(new Response(nouns));

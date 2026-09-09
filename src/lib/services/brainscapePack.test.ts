@@ -236,31 +236,88 @@ test.each(eventSources)('$name yields the saved links first and each deck as its
   expect(vi.getTimerCount()).toBe(0);
 });
 
-test('fetchPackEvents reuses the initial deck body and yields its sides before any delay or second fetch', async () => {
-  const url = 'https://www.brainscape.com/flashcards/011-common-greetings-14150191/packs/21648778';
-  const response = new Response(greetings);
-  const readBody = vi.spyOn(response, 'text');
-  const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(response);
-  for (let index = 1; index < links.length; index += 1) fetchImpl.mockResolvedValueOnce(new Response(nouns));
+test.each(['', '/', '?source=share#cards', '/?source=share#cards'])(
+  'a pasted deck URL yields only its own link and deck from one page request: %s', async (suffix) => {
+    const url = `https://www.brainscape.com/flashcards/011-common-greetings-14150191/packs/21648778${suffix}`;
+    const response = new Response(greetings);
+    const readBody = vi.spyOn(response, 'text');
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(response);
+    const events = fetchPackEvents(url, fetchImpl);
 
+    expect(await events.next()).toEqual({ done: false, value: {
+      links: ['/flashcards/011-common-greetings-14150191/packs/21648778'],
+    } });
+    expect(await events.next()).toEqual({ done: false, value: {
+      link: '/flashcards/011-common-greetings-14150191/packs/21648778', title: null, sides: greetingSides,
+    } });
+    expect(await events.next()).toEqual({ done: true, value: undefined });
+    expect(fetchImpl).toHaveBeenCalledExactlyOnceWith(url, expect.any(Object));
+    expect(readBody).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);
+
+test('a pasted deck URL selects a later page link and preserves its title', async () => {
+  const url = 'https://www.brainscape.com/flashcards/012-nouns-articles-14150195/packs/21648778';
+  const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(pack + nouns));
   const events = fetchPackEvents(url, fetchImpl);
-  expect(await events.next()).toEqual({ done: false, value: { links } });
-  expect(await events.next()).toEqual({ done: false, value: { link: links[0], title: null, sides: greetingSides } });
-  expect(fetchImpl).toHaveBeenCalledOnce();
-  expect(readBody).toHaveBeenCalledOnce();
-  expect(vi.getTimerCount()).toBe(0);
-  for (const [index, link] of links.slice(1).entries()) {
-    const next = events.next();
-    await vi.advanceTimersByTimeAsync(999);
-    expect(fetchImpl).toHaveBeenCalledTimes(index + 1);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(await next).toEqual({ done: false, value: { link, title: null, sides: nounSides } });
-    expect(fetchImpl).toHaveBeenCalledTimes(index + 2);
-    expect(fetchImpl).toHaveBeenLastCalledWith(`https://www.brainscape.com${link}`, expect.any(Object));
-  }
+
+  expect(await events.next()).toEqual({ done: false, value: {
+    links: ['/flashcards/012-nouns-articles-14150195/packs/21648778'],
+  } });
+  expect(await events.next()).toEqual({ done: false, value: {
+    link: '/flashcards/012-nouns-articles-14150195/packs/21648778', title: '0.1.2 Nouns & Articles', sides: nounSides,
+  } });
   expect(await events.next()).toEqual({ done: true, value: undefined });
-  expect(readBody).toHaveBeenCalledOnce();
-  expect(vi.getTimerCount()).toBe(0);
+  expect(fetchImpl).toHaveBeenCalledExactlyOnceWith(url, expect.any(Object));
+});
+
+test.each(['/packs/21648778', '/flashcards/012-nouns-articles-14150195/packs/21648778'])(
+  'a pasted deck path selects its own link even when the canonical names %s', async (canonical) => {
+    const url = 'https://www.brainscape.com/flashcards/011-common-greetings-14150191/packs/21648778';
+    const html = greetings.replace(`<link href="${url}" rel="canonical">`, `<link href="${canonical}" rel="canonical">`);
+    expect(html).toContain(`<link href="${canonical}" rel="canonical">`);
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(html));
+    const events = fetchPackEvents(url, fetchImpl);
+
+    expect(await events.next()).toEqual({ done: false, value: {
+      links: ['/flashcards/011-common-greetings-14150191/packs/21648778'],
+    } });
+    expect(await events.next()).toEqual({ done: false, value: {
+      link: '/flashcards/011-common-greetings-14150191/packs/21648778', title: null, sides: greetingSides,
+    } });
+    expect(await events.next()).toEqual({ done: true, value: undefined });
+    expect(fetchImpl).toHaveBeenCalledExactlyOnceWith(url, expect.any(Object));
+  },
+);
+
+test.each([greetings, '<html>No preview available</html>'])(
+  'a pasted deck absent from its page links reports its path before discovery (%#)', async (html) => {
+    const url = 'https://www.brainscape.com/flashcards/missing-123/packs/21648778';
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(html));
+    const events = fetchPackEvents(url, fetchImpl);
+
+    await expect(events.next()).rejects.toThrow(new Error(
+      `Brainscape page ${url} contained 0 deck links matching /flashcards/missing-123/packs/21648778; check the page HTML.`,
+    ));
+    expect(await events.next()).toEqual({ done: true, value: undefined });
+    expect(fetchImpl).toHaveBeenCalledExactlyOnceWith(url, expect.any(Object));
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);
+
+test.each([
+  { html: '', message: 'Brainscape deck https://www.brainscape.com/flashcards/test/packs/42 contained 0 Spanish sides; check the page HTML.' },
+  { html: answerHtml('<p> </p>'), message: 'Card card-back-123 has no Spanish text; check the Brainscape HTML.' },
+])('a pasted deck with unusable sides throws the observed error after discovery: $message', async ({ html, message }) => {
+  const url = 'https://www.brainscape.com/flashcards/test/packs/42';
+  const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(`<a href='/flashcards/test/packs/42'>Deck</a>${html}`));
+  const events = fetchPackEvents(url, fetchImpl);
+
+  expect(await events.next()).toEqual({ done: false, value: { links: ['/flashcards/test/packs/42'] } });
+  await expect(events.next()).rejects.toThrow(new Error(message));
+  expect(await events.next()).toEqual({ done: true, value: undefined });
+  expect(fetchImpl).toHaveBeenCalledExactlyOnceWith(url, expect.any(Object));
 });
 
 test.each(eventSources)('$name preserves discovery failures without yielding a links event', async ({ stream, url }) => {
@@ -275,7 +332,7 @@ test.each(eventSources)('$name preserves discovery failures without yielding a l
     {
       response: new Response('<html>No preview available</html>'),
       error: new Error(url === packUrl
-        ? 'Brainscape page https://www.brainscape.com/packs/21648778 contained 0 deck links for pack 21648778; check the page HTML.'
+        ? 'Brainscape page https://www.brainscape.com/packs/21648778 contained 0 deck links for deck set 21648778; check the page HTML.'
         : 'Brainscape page has no canonical link href; check the page HTML.'),
     },
   ];
@@ -297,7 +354,7 @@ test('fetchPackEvents preserves the missing pack id error before fetching', asyn
   const events = fetchPackEvents('https://www.brainscape.com/learn/spanish', fetchImpl);
 
   await expect(events.next()).rejects.toThrow(new Error(
-    'Brainscape URL https://www.brainscape.com/learn/spanish has no /packs/DIGITS path; use a public pack URL.',
+    'Brainscape URL https://www.brainscape.com/learn/spanish has no deck or deck set path; use a public Brainscape deck or deck set URL.',
   ));
   expect(fetchImpl).not.toHaveBeenCalled();
 });
@@ -449,6 +506,8 @@ test('rejects contents without one valid Brainscape pack-set URL', () => {
 test.each([
   'https://www.brainscape.com/packs/21648778',
   'https://www.brainscape.com/packs/42/',
+  'https://www.brainscape.com/packs/level-2-rw-core-lessons-21882519',
+  'https://www.brainscape.com/packs/level-2-rw-core-lessons-21882519/?source=share#cards',
   ' \n\thttps://brainscape.com/packs/42\t ',
   'http://BRAINSCAPE.com/packs/42',
   'https://learn.brainscape.com/flashcards/greetings/packs/42?source=share#cards',
@@ -470,6 +529,9 @@ test.each([
   'https://www.brainscape.com/packs/42//',
   'https://www.brainscape.com/packs/42/decks',
   'https://www.brainscape.com/packs/42abc',
+  'https://www.brainscape.com/nested/packs/42',
+  'https://www.brainscape.com/flashcards/nested/lesson/packs/42',
+  'https://www.brainscape.com/flashcards/lesson/packs/level-42',
   'https://www.brainscape.com/packs/',
   'https://www.brainscape.com/packs/４２',
   '/packs/42',
@@ -548,7 +610,7 @@ test('reports zero pack-set deck links for the canonical pack even when another 
     <a href='/flashcards/other/packs/420'>other pack</a>`;
 
   expect(() => packSetLinks(html))
-    .toThrow(new Error('Brainscape page https://www.brainscape.com/packs/42 contained 0 deck links for pack 42; check the page HTML.'));
+    .toThrow(new Error('Brainscape page https://www.brainscape.com/packs/42 contained 0 deck links for deck set 42; check the page HTML.'));
 });
 
 test('extracts every answer without footnotes from the common greetings fixture in page order', () => {
@@ -666,16 +728,13 @@ test('fetches the saved pack and each deck sequentially, with a Chrome user agen
   expect(vi.getTimerCount()).toBe(0);
 });
 
-test('reuses the initial deck HTML when the supplied pack URL is a deck URL', async () => {
-  const url = new URL(links[0]!, packUrl).href;
+test('fetchPack returns only the pasted deck sides from the initial HTML', async () => {
+  const url = 'https://www.brainscape.com/flashcards/011-common-greetings-14150191/packs/21648778';
   const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(greetings));
-  for (let index = 1; index < links.length; index += 1) fetchImpl.mockResolvedValueOnce(new Response(nouns));
-
   const result = fetchPack(url, fetchImpl);
-  await vi.runAllTimersAsync();
-
-  expect(await result).toEqual(links.flatMap((_, index) => index === 0 ? greetingSides : nounSides));
-  expect(fetchImpl.mock.calls.map(([requested]) => requested)).toEqual(links.map((link) => new URL(link, packUrl).href));
+  const assertion = expect(result).resolves.toEqual(greetingSides);
+  await Promise.all([assertion, vi.runAllTimersAsync()]);
+  expect(fetchImpl).toHaveBeenCalledExactlyOnceWith(url, expect.any(Object));
 });
 
 test.each(['not a URL', 'https://www.brainscape.com/learn/spanish'])(
@@ -776,7 +835,7 @@ test.each(['pack', 'deck'])(
     if (page === 'deck') fetchImpl.mockResolvedValueOnce(new Response(pack));
     fetchImpl.mockResolvedValueOnce(new Response('<html><body>No preview available</body></html>'));
     const message = page === 'pack'
-      ? `Brainscape page ${packUrl} contained 0 deck links for pack ${packId}`
+      ? `Brainscape page ${packUrl} contained 0 deck links for deck set ${packId}`
       : `Brainscape deck ${new URL(links[0]!, packUrl).href} contained 0 Spanish sides`;
 
     const assertion = expect(fetchPack(packUrl, fetchImpl)).rejects.toThrow(message);
@@ -959,7 +1018,7 @@ test.each([
   { html: '<html>No preview available</html>', message: 'Brainscape page has no canonical link href; check the page HTML.' },
   { html: '<link rel="canonical" href="https://[">', message: 'Brainscape canonical href https://[ is not a valid URL; check the page HTML.' },
   { html: '<link rel="canonical" href="/learn/spanish">', message: 'Brainscape canonical URL /learn/spanish has no /packs/SLUG-DIGITS or /packs/DIGITS path; check the page HTML.' },
-  { html: '<link rel="canonical" href="/packs/21882519">', message: 'Brainscape page /packs/21882519 contained 0 deck links for pack 21882519; check the page HTML.' },
+  { html: '<link rel="canonical" href="/packs/21882519">', message: 'Brainscape page /packs/21882519 contained 0 deck links for deck set 21882519; check the page HTML.' },
 ])('fetchPackSet reports unusable pack-set HTML and stops: $message', async ({ html, message }) => {
   const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(html));
 

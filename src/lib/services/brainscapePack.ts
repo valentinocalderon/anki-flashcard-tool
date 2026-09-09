@@ -87,7 +87,7 @@ export function packSetLinks(html: string): DeckLink[] {
   }
   const links = deckLinks(html, packId);
   if (links.length === 0) {
-    throw new Error(`Brainscape page ${href} contained ${links.length} deck links for pack ${packId}; check the page HTML.`);
+    throw new Error(`Brainscape page ${href} contained ${links.length} deck links for deck set ${packId}; check the page HTML.`);
   }
   return links;
 }
@@ -128,6 +128,8 @@ export function spanishSides(html: string): string[] {
   return sides;
 }
 
+const packPath = /^\/(?:(flashcards\/[^/\s?#]+\/packs\/)|packs\/(?:[^/\s?#]+-)?)(\d+)\/?$/;
+
 export function isPackUrl(text: string): boolean {
   const value = text.trim();
   if (/\s/.test(value) || !URL.canParse(value)) return false;
@@ -135,7 +137,7 @@ export function isPackUrl(text: string): boolean {
   const url = new URL(value);
   return (url.protocol === 'http:' || url.protocol === 'https:')
     && (url.hostname === 'brainscape.com' || url.hostname.endsWith('.brainscape.com'))
-    && /\/packs\/\d+\/?$/.test(url.pathname);
+    && packPath.test(url.pathname);
 }
 
 export function isPackSetUrl(text: string): boolean {
@@ -176,7 +178,7 @@ async function* fetchDecks(links: DeckLink[], pageUrl: URL, fetchImpl: typeof fe
   for (const { href: link, title } of links) {
     const deckUrl = new URL(link, pageUrl).href;
     let deckHtml = firstHtml;
-    if (deckUrl !== pageUrl.href || deckHtml === undefined) {
+    if (link !== pageUrl.pathname.replace(/\/$/, '') || deckHtml === undefined) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
       deckHtml = await readPage(deckUrl, fetchImpl);
     }
@@ -190,14 +192,18 @@ async function* fetchDecks(links: DeckLink[], pageUrl: URL, fetchImpl: typeof fe
 
 export async function* fetchPackEvents(url: string, fetchImpl: typeof fetch): AsyncGenerator<PackEvent, void> {
   const packUrl = new URL(url);
-  const packId = /\/packs\/(\d+)\/?$/.exec(packUrl.pathname)?.[1];
+  const pathMatch = packPath.exec(packUrl.pathname);
+  const packId = pathMatch?.[2];
   if (!packId) {
-    throw new Error(`Brainscape URL ${url} has no /packs/DIGITS path; use a public pack URL.`);
+    throw new Error(`Brainscape URL ${url} has no deck or deck set path; use a public Brainscape deck or deck set URL.`);
   }
   const html = await readPage(packUrl.href, fetchImpl);
-  const links = deckLinks(html, packId);
+  const isDeck = Boolean(pathMatch?.[1]);
+  const links = deckLinks(html, packId)
+    .filter(({ href }) => !isDeck || href === packUrl.pathname.replace(/\/$/, ''));
   if (links.length === 0) {
-    throw new Error(`Brainscape page ${packUrl.href} contained ${links.length} deck links for pack ${packId}; check the page HTML.`);
+    const target = isDeck ? `matching ${packUrl.pathname}` : `for deck set ${packId}`;
+    throw new Error(`Brainscape page ${packUrl.href} contained ${links.length} deck links ${target}; check the page HTML.`);
   }
   yield { links: links.map(({ href }) => href) };
   yield* fetchDecks(links, packUrl, fetchImpl, html);

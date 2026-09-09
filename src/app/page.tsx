@@ -119,7 +119,7 @@ export default function HomePage() {
         }}
         className="flex flex-col gap-3 mb-6"
       >
-        <label htmlFor="words" className="font-semibold">Words: lines, commas or a sentence; a Brainscape pack URL alone runs the whole pack</label>
+        <label htmlFor="words" className="font-semibold">Words: lines, commas or a sentence; a Brainscape deck URL alone runs that deck, a deck set URL runs every deck in it</label>
         <textarea
           id="words"
           rows={8}
@@ -184,7 +184,7 @@ export default function HomePage() {
         const failed = items.filter(({ status }) => status === 'error').length;
         return (
           <section key={href} aria-live="polite" className="text-sm mb-4">
-            <h2 className="font-semibold mb-2">Pack {index + 1}{title && ` — ${title}`}</h2>
+            <h2 className="font-semibold mb-2">Deck {index + 1}{title && ` — ${title}`}</h2>
             {items.length > 0 && (
               <>
                 <ul className="space-y-2">

@@ -451,6 +451,21 @@ test('results without link progress keep the original direct flat list, includin
   expect(page.html()).not.toMatch(/<h2\b|\d+ added, \d+ skipped|Deck links finished:/);
 });
 
+test('the page labels deck and deck set URLs and renders a bare Deck 1 heading', async () => {
+  const page = pageRun(0, 0);
+  page.generate.mockResolvedValueOnce((async function* (): AsyncIterable<RunEvent> {
+    yield { links: ['/flashcards/011-common-greetings-14150191/packs/21648778'] };
+    yield { link: '/flashcards/011-common-greetings-14150191/packs/21648778', title: null };
+  })());
+  page.submit();
+  await page.generation.run;
+
+  expect.soft(/<label[^>]*>(.*?)<\/label>/.exec(page.html())?.[1]).toBe(
+    'Words: lines, commas or a sentence; a Brainscape deck URL alone runs that deck, a deck set URL runs every deck in it',
+  );
+  expect.soft(resultGroups(page.html())).toEqual([{ heading: 'Deck 1', words: [], tally: undefined }]);
+});
+
 test('deck groups show every discovery heading before any deck is fetched', async () => {
   const page = pageRun(0, 0);
   const discovered = deferred<void>();
@@ -463,10 +478,10 @@ test('deck groups show every discovery heading before any deck is fetched', asyn
   page.submit();
   await discovered.promise;
   expect(resultGroups(page.html())).toEqual([
-    { heading: 'Pack 1', words: [], tally: undefined },
-    { heading: 'Pack 2', words: [], tally: undefined },
+    { heading: 'Deck 1', words: [], tally: undefined },
+    { heading: 'Deck 2', words: [], tally: undefined },
   ]);
-  expect(page.html().match(/<section\b[^>]*><h2\b[^>]*>Pack [12]<\/h2><\/section>/g)).toHaveLength(2);
+  expect(page.html().match(/<section\b[^>]*><h2\b[^>]*>Deck [12]<\/h2><\/section>/g)).toHaveLength(2);
   expect(page.html()).toContain('Deck links finished: 0 of 2');
   finish.resolve();
   await page.generation.run;
@@ -491,8 +506,8 @@ test('deck groups keep discovery order and place streamed and final results by t
     yield { results, audio: { unspeakable: 0, message: null }, capReached: false, send: noSend, backfill: noBackfill };
   })());
   const expected = [
-    { heading: 'Pack 1 — Common Greetings', words: ['casa'], tally: '1 added, 0 skipped' },
-    { heading: 'Pack 2 — Travel', words: ['viajar'], tally: '1 added, 0 skipped' },
+    { heading: 'Deck 1 — Common Greetings', words: ['casa'], tally: '1 added, 0 skipped' },
+    { heading: 'Deck 2 — Travel', words: ['viajar'], tally: '1 added, 0 skipped' },
   ];
   page.submit();
   await streamed.promise;
@@ -504,14 +519,14 @@ test('deck groups keep discovery order and place streamed and final results by t
   ]);
   expect(page.children().filter((child) => React.isValidElement(child) && child.type === 'ul').map((list) => renderToStaticMarkup(list)))
     .toEqual(['<ul aria-live="polite" class="text-sm space-y-2"><li class="bg-gray-100 p-3 rounded"><span aria-hidden="true" class="text-xs mr-2">–</span><strong>suelto</strong>: skipped: already stored</li></ul>']);
-  expect(page.html()).toMatch(/<h2\b[^>]*>Pack 1 — Common Greetings<\/h2><ul\b[^>]*><li\b[^>]*>.*?<strong>casa<\/strong>.*?<\/li><\/ul><p\b[^>]*>1 added, 0 skipped<\/p>/);
+  expect(page.html()).toMatch(/<h2\b[^>]*>Deck 1 — Common Greetings<\/h2><ul\b[^>]*><li\b[^>]*>.*?<strong>casa<\/strong>.*?<\/li><\/ul><p\b[^>]*>1 added, 0 skipped<\/p>/);
   finish.resolve();
   await page.generation.run;
   expect(resultGroups(page.html())).toEqual(expected);
   expect(page.html().match(/<li\b/g)).toHaveLength(3);
 });
 
-test('deck groups use bare Pack 2 when its link title is null', async () => {
+test('deck groups use bare Deck 2 when its link title is null', async () => {
   const page = pageRun(0, 0);
   page.generate.mockResolvedValueOnce((async function* (): AsyncIterable<RunEvent> {
     yield { links: ['deck-z', 'deck-a'] };
@@ -522,8 +537,8 @@ test('deck groups use bare Pack 2 when its link title is null', async () => {
   page.submit();
   await page.generation.run;
   expect(resultGroups(page.html())).toEqual([
-    { heading: 'Pack 1 — Common Greetings', words: [], tally: undefined },
-    { heading: 'Pack 2', words: ['viajar'], tally: '0 added, 1 skipped' },
+    { heading: 'Deck 1 — Common Greetings', words: [], tally: undefined },
+    { heading: 'Deck 2', words: ['viajar'], tally: '0 added, 1 skipped' },
   ]);
 });
 
@@ -558,7 +573,7 @@ test('deck groups tally every status as items while results stream, including du
   }
   await page.generation.run;
   expect(resultGroups(page.html())).toEqual([
-    { heading: 'Pack 1 — Common Greetings', words: ['casa', 'hablar', 'calle', 'sol', 'casa', 'hogar'],
+    { heading: 'Deck 1 — Common Greetings', words: ['casa', 'hablar', 'calle', 'sol', 'casa', 'hogar'],
       tally: '2 added, 3 skipped, 1 failed' },
   ]);
   expect(page.html().match(/<li\b/g)).toHaveLength(6);
@@ -603,7 +618,7 @@ test.each(['word list', 'failed request'] as const)('deck groups clear before a 
   page.submit();
   await page.generation.run;
   expect(resultGroups(page.html())).toEqual([
-    { heading: 'Pack 1 — Common Greetings', words: ['casa'], tally: '1 added, 0 skipped' },
+    { heading: 'Deck 1 — Common Greetings', words: ['casa'], tally: '1 added, 0 skipped' },
   ]);
   const started = deferred<void>();
   const finish = deferred<void>();
@@ -648,9 +663,9 @@ test.each(['deck fetch', 'after result'] as const)('deck groups preserve observe
   page.submit();
   await expect(page.generation.run).rejects.toThrow(message);
   expect(resultGroups(page.html())).toEqual([
-    { heading: 'Pack 1 — Common Greetings', words: stage === 'after result' ? ['casa'] : [],
+    { heading: 'Deck 1 — Common Greetings', words: stage === 'after result' ? ['casa'] : [],
       tally: stage === 'after result' ? '1 added, 0 skipped' : undefined },
-    { heading: 'Pack 2', words: [], tally: undefined },
+    { heading: 'Deck 2', words: [], tally: undefined },
   ]);
   expect(page.html()).toContain(`<p role="alert" class="text-red-600">${message}</p>`);
   expect(page.html()).not.toContain('Anki is not running');

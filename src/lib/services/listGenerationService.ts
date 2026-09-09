@@ -48,8 +48,8 @@ async function* inputItems(
   fetchImpl: typeof fetch,
   results: WordResult[],
 ): AsyncGenerator<GenerationEvent, readonly InputItem[]> {
-  const packEvents = isPackSetUrl(text) ? fetchPackSetEvents(text.trim(), fetchImpl)
-    : isPackUrl(text) ? fetchPackEvents(text.trim(), fetchImpl) : null;
+  const packEvents = isPackUrl(text) ? fetchPackEvents(text.trim(), fetchImpl)
+    : isPackSetUrl(text) ? fetchPackSetEvents(text.trim(), fetchImpl) : null;
   if (packEvents === null) {
     return (await resolveWordList(text, ask)).map((spanish) => ({
       forms: [{ spanish, query: normalizeQuery(spanish) }],
