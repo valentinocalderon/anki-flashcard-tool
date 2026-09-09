@@ -150,6 +150,11 @@ export function isPackSetUrl(text: string): boolean {
     && /^\/p\/[a-zA-Z\d-]+\/?$/.test(url.pathname);
 }
 
+export function brainscapeUrls(text: string): string[] | null {
+  const urls = text.trim().split(/\s+/);
+  return urls.every((url) => isPackUrl(url) || isPackSetUrl(url)) ? urls : null;
+}
+
 async function readPage(pageUrl: string, fetchImpl: typeof fetch): Promise<string> {
   const signal = AbortSignal.timeout(15000);
   try {
@@ -173,12 +178,13 @@ async function readPage(pageUrl: string, fetchImpl: typeof fetch): Promise<strin
 
 type DeckEvent = { link: string; title: string | null; sides: string[] };
 export type PackEvent = { links: string[] } | DeckEvent;
+export type PastedEvent = PackEvent | { url: string; error: unknown };
 
-async function* fetchDecks(links: DeckLink[], pageUrl: URL, fetchImpl: typeof fetch, firstHtml?: string): AsyncGenerator<DeckEvent, void> {
+async function* fetchDecks(links: DeckLink[], pageUrl: URL, fetchImpl: typeof fetch, firstHtml?: string, pageBodies?: ReadonlyMap<string, string>): AsyncGenerator<DeckEvent, void> {
   for (const { href: link, title } of links) {
     const deckUrl = new URL(link, pageUrl).href;
-    let deckHtml = firstHtml;
-    if (link !== pageUrl.pathname.replace(/\/$/, '') || deckHtml === undefined) {
+    let deckHtml = link === pageUrl.pathname.replace(/\/$/, '') ? firstHtml : pageBodies?.get(link);
+    if (deckHtml === undefined) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
       deckHtml = await readPage(deckUrl, fetchImpl);
     }
@@ -190,31 +196,71 @@ async function* fetchDecks(links: DeckLink[], pageUrl: URL, fetchImpl: typeof fe
   }
 }
 
-export async function* fetchPackEvents(url: string, fetchImpl: typeof fetch): AsyncGenerator<PackEvent, void> {
-  const packUrl = new URL(url);
-  const pathMatch = packPath.exec(packUrl.pathname);
+type ResolvedPack = { pageUrl: URL; links: DeckLink[]; html: string };
+
+async function resolvePack(url: string, fetchImpl: typeof fetch, kind: 'pack' | 'pack-set'): Promise<ResolvedPack> {
+  const pageUrl = new URL(url);
+  if (kind === 'pack-set') {
+    const html = await readPage(pageUrl.href, fetchImpl);
+    return { pageUrl, links: packSetLinks(html), html };
+  }
+  const pathMatch = packPath.exec(pageUrl.pathname);
   const packId = pathMatch?.[2];
   if (!packId) {
     throw new Error(`Brainscape URL ${url} has no deck or deck set path; use a public Brainscape deck or deck set URL.`);
   }
-  const html = await readPage(packUrl.href, fetchImpl);
+  const html = await readPage(pageUrl.href, fetchImpl);
   const isDeck = Boolean(pathMatch?.[1]);
   const links = deckLinks(html, packId)
-    .filter(({ href }) => !isDeck || href === packUrl.pathname.replace(/\/$/, ''));
+    .filter(({ href }) => !isDeck || href === pageUrl.pathname.replace(/\/$/, ''));
   if (links.length === 0) {
-    const target = isDeck ? `matching ${packUrl.pathname}` : `for deck set ${packId}`;
-    throw new Error(`Brainscape page ${packUrl.href} contained ${links.length} deck links ${target}; check the page HTML.`);
+    const target = isDeck ? `matching ${pageUrl.pathname}` : `for deck set ${packId}`;
+    throw new Error(`Brainscape page ${pageUrl.href} contained ${links.length} deck links ${target}; check the page HTML.`);
   }
+  return { pageUrl, links, html };
+}
+
+export async function* fetchPackEvents(url: string, fetchImpl: typeof fetch): AsyncGenerator<PackEvent, void> {
+  const { pageUrl, links, html } = await resolvePack(url, fetchImpl, 'pack');
   yield { links: links.map(({ href }) => href) };
-  yield* fetchDecks(links, packUrl, fetchImpl, html);
+  yield* fetchDecks(links, pageUrl, fetchImpl, html);
 }
 
 export async function* fetchPackSetEvents(url: string, fetchImpl: typeof fetch): AsyncGenerator<PackEvent, void> {
-  const packSetUrl = new URL(url);
-  const html = await readPage(packSetUrl.href, fetchImpl);
-  const links = packSetLinks(html);
+  const { pageUrl, links, html } = await resolvePack(url, fetchImpl, 'pack-set');
   yield { links: links.map(({ href }) => href) };
-  yield* fetchDecks(links, packSetUrl, fetchImpl);
+  yield* fetchDecks(links, pageUrl, fetchImpl, html);
+}
+
+export async function* fetchPastedEvents(urls: string[], fetchImpl: typeof fetch): AsyncGenerator<PastedEvent, void> {
+  const pages: (ResolvedPack & { url: string })[] = [];
+  const hrefs = new Set<string>();
+  const pageBodies = new Map<string, string>();
+  for (const [index, url] of [...new Set(urls)].entries()) {
+    if (index > 0) await new Promise((resolve) => setTimeout(resolve, 1000));
+    try {
+      const page = await resolvePack(url, fetchImpl, isPackSetUrl(url) ? 'pack-set' : 'pack');
+      const path = page.pageUrl.pathname.replace(/\/$/, '');
+      if (!pageBodies.has(path)) pageBodies.set(path, page.html);
+      for (const { href } of page.links) hrefs.add(href);
+      pages.push({ ...page, url });
+    } catch (error) {
+      yield { url, error };
+    }
+  }
+  yield { links: [...hrefs] };
+  const completed = new Set<string>();
+  for (const { url, pageUrl, links, html } of pages) {
+    try {
+      const remaining = links.filter(({ href }) => !completed.has(href));
+      for await (const event of fetchDecks(remaining, pageUrl, fetchImpl, html, pageBodies)) {
+        completed.add(event.link);
+        yield event;
+      }
+    } catch (error) {
+      yield { url, error };
+    }
+  }
 }
 
 export async function fetchPack(url: string, fetchImpl: typeof fetch): Promise<string[]> {
