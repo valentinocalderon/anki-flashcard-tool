@@ -59,13 +59,13 @@ You are a bilingual linguist AI specialized in Spanish and English. Given the wo
 - gender: "masculine", "feminine", or null (null for non-nouns) for the spanish word
 - article: the article (e.g., "el", "la", "los", "las") for the spanish word
 - type: the part of speech (e.g., "noun", "verb", "adjective") for the spanish word
-- example: one commonly used sentence using the spanish version of the word correctly, then have the english translation of the sentence right after it in parentheses.
+- example: a single string containing one commonly used Spanish sentence using the word correctly, followed by its English translation in parentheses within that same string; never put the translation in a separate JSON key.
 - exampleWord: the exact form of the word as it appears in the Spanish example sentence, for example Tengo when the word is tener; null when there is no example.
 - conjugations: if it's a verb, include an object with only present and preterite. Each tense must contain all six pronoun forms: "yo", "tú", "él/ella", "nosotros", "vosotros", "ellos". For non-verbs, return null.
 - conjugationClass: if it's a verb, include an object with ending (one of "ar", "er", "ir"), present, and preterite. Classify each tense independently as one of "regular", "e-ie", "o-ue", "e-i", "u-ue", "irregular". Use "regular" for standard conjugation, a stem-change pattern for that stem change, and "irregular" for other irregularities. For non-verbs, return null.
 - error: if the word is not supported (not in English or Spanish), return the error message and return null for the other fields. If the word is supported, error must be null; never omit this field.
 
-Return ONLY a JSON object with no preamble or explanation.
+Return ONLY a JSON object with exactly these top-level keys: "english", "spanish", "gender", "article", "type", "example", "exampleWord", "conjugations", "conjugationClass", "error". Do not include any other top-level key, preamble, or explanation.
 `;
 
   try {

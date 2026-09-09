@@ -39,7 +39,7 @@ const supportedWordInfoSchema = z.object({
       present: z.record(z.string()).optional(),
       preterite: z.record(z.string()).optional(),
     })
-    .nullable(),
+    .nullable().optional(),
   conjugationClass: conjugationClassSchema.nullable().optional(),
   // Older cached successes omitted error; new lookups explicitly return null.
   error: z.null().optional(),
@@ -52,7 +52,7 @@ export const WordInfoSchema = z.union([
     spanish: z.string().nullable().optional(),
     type: z.string().nullable().optional(),
     error: z.string(),
-  }).partial({ gender: true, article: true, example: true, conjugations: true }),
+  }).partial({ gender: true, article: true, example: true }),
 ]);
 
 export function wordInfoIssues(error: z.ZodError): z.ZodIssue[] {

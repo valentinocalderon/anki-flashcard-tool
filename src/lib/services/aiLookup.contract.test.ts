@@ -90,21 +90,17 @@ test('a supported-shaped reply with a string error parses through the error bran
   const payload = { ...supported, error: 'Unsupported word: bonjour is not English or Spanish.' };
 
   expect(WordInfoSchema.parse(payload)).toEqual(payload);
-
-  const missingConjugations: Record<string, unknown> = { ...payload };
-  delete missingConjugations.conjugations;
-  expect(WordInfoSchema.parse(missingConjugations)).toEqual(missingConjugations);
 });
 
-test('a supported reply missing conjugations reports only the supported branch', async () => {
+test('a supported reply missing gender reports only the supported branch', async () => {
   const payload: Record<string, unknown> = { ...supported };
-  delete payload.conjugations;
+  delete payload.gender;
   respondWith(payload);
 
   const answer = openaiLookup('casa');
 
   await expect(answer).rejects.toHaveProperty('message',
-    'AI response did not match the expected shape: [{"code":"invalid_type","expected":"object","received":"undefined","path":["conjugations"],"message":"Required"}]',
+    'AI response did not match the expected shape: [{"code":"invalid_type","expected":"string","received":"undefined","path":["gender"],"message":"Required"}]',
   );
   await expect(answer).rejects.not.toHaveProperty('message', expect.stringContaining('"error"'));
   await expect(answer).rejects.toHaveProperty('cause', expect.any(ZodError));
@@ -154,6 +150,48 @@ test('generation stores cards from a supported OpenAI response with null error',
   ]);
   expect(await cachedLookup(db, 'casa', openaiLookup)).toEqual(supported);
   expect(createCompletion).toHaveBeenCalledOnce();
+});
+
+test('the 2026-09-09 supported payload with conjugations omitted parses', async () => {
+  const payload: Record<string, unknown> = { ...supported };
+  delete payload.conjugations;
+  delete payload.exampleWord;
+
+  expect(WordInfoSchema.parse(payload)).toEqual(payload);
+  respondWith(payload);
+
+  await expect(openaiLookup('casa')).resolves.toEqual(payload);
+  expect(createCompletion).toHaveBeenCalledOnce();
+});
+
+test('generation stores cards from the 2026-09-09 supported payload with conjugations omitted', async () => {
+  const payload: Record<string, unknown> = { ...supported };
+  delete payload.conjugations;
+  delete payload.exampleWord;
+  respondWith(payload);
+
+  const result = await generateForWords(db, 'casa', openaiLookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  expect(result.results).toEqual([{ word: 'casa', status: 'added', vocabCards: 1, conjugationCards: 0 }]);
+  expect(await db.select({ deck: cards.deck, kind: cards.kind, front: cards.front, back: cards.back }).from(cards)).toEqual([
+    { deck: 'Spanish::Vocab', kind: 'basic', front: 'house', back: 'la casa' },
+  ]);
+  expect(await db.select({ query: words.query, info: words.info }).from(words)).toEqual([
+    { query: 'casa', info: JSON.stringify(payload) },
+  ]);
+  expect(await cachedLookup(db, 'casa', openaiLookup)).toEqual(payload);
+  expect(createCompletion).toHaveBeenCalledOnce();
+});
+
+test('a stored 2026-09-09 supported payload with conjugations omitted reads back through cachedLookup', async () => {
+  const payload: Record<string, unknown> = { ...supported };
+  delete payload.conjugations;
+  delete payload.exampleWord;
+  await db.insert(words).values({ query: 'casa', info: JSON.stringify(payload), lookedUpAt: 123 });
+
+  await expect(cachedLookup(db, 'casa', openaiLookup)).resolves.toEqual(payload);
+  expect(createCompletion).not.toHaveBeenCalled();
+  expect(await db.select({ info: words.info }).from(words)).toEqual([{ info: JSON.stringify(payload) }]);
 });
 
 test('the live Diecinueve payload with null type stores cards and serves the next lookup from cache', async () => {
@@ -234,6 +272,8 @@ test('the lookup prompt requires null error for supported words and never omissi
   expect(prompt).toContain('If the word is supported, error must be null; never omit this field.');
   expect(prompt).toContain('return null for the other fields');
   expect(prompt).not.toContain("don't include this field");
+  expect(prompt).toContain('never put the translation in a separate JSON key.');
+  expect(prompt).toContain('Do not include any other top-level key, preamble, or explanation.');
 });
 
 test('a null type is accepted in a supported lookup', () => {
@@ -248,11 +288,11 @@ test.each(['english', 'spanish'])(
   },
 );
 
-test('a supported lookup still requires the type key', () => {
+test.each(['english', 'spanish', 'gender', 'article', 'example', 'type'])('a supported lookup still requires the %s key', (field) => {
   const payload: Record<string, unknown> = { ...supported };
-  delete payload.type;
+  delete payload[field];
 
-  expect(WordInfoSchema.safeParse(payload).success).toBe(false);
+  expect(() => WordInfoSchema.parse(payload)).toThrow(ZodError);
 });
 
 test.each([{ type: 42 }, { type: true }, { type: {} }, { type: [] }])(

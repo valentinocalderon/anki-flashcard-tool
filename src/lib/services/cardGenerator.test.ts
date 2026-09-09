@@ -478,6 +478,16 @@ test('skips conjugations when classification exists without conjugations', () =>
   });
 });
 
+test('a parsed verb with the conjugations key omitted produces no conjugation cards or claims', () => {
+  const payload: Record<string, unknown> = { ...regularVerb };
+  delete payload.conjugations;
+
+  const info = WordInfoSchema.parse(payload);
+
+  expect(info).not.toHaveProperty('conjugations');
+  expect(conjugationCards(info, new Set())).toEqual({ cards: [], claims: [] });
+});
+
 test('config declares the three card kinds, two tenses, and both decks', () => {
   const config = loadConfig();
   expect(config.cardTypes).toEqual({ basic: true, example: true, conjugation: true });
