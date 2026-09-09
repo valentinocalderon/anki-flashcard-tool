@@ -295,7 +295,7 @@ function SendFooter({ report, backfill, pendingCount, declinedCount, awaitingAud
 }
 
 function ResultLine({ result }: { result: WordResult }) {
-  const mark = { added: '✓', updated: '↻', exists: '–', skipped: '–', error: '!' }[result.status];
+  const mark = { added: '✓', updated: '↻', exists: '–', skipped: '–', duplicate: '–', error: '!' }[result.status];
 
   return (
     <li className="bg-gray-100 p-3 rounded">

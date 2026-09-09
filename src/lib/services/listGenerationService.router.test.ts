@@ -62,8 +62,8 @@ test('the router streams every service event in order and yields the send and ba
   const order: string[] = [];
   vi.spyOn(listGeneration, 'generateForWordsEvents').mockImplementation(async function* () {
     yield { links: ['deck-1', 'deck-2'] };
-    yield { link: 'deck-1' };
-    yield { link: 'deck-2' };
+    yield { link: 'deck-1', title: 'Common Greetings' };
+    yield { link: 'deck-2', title: null };
     yield { result };
     yield summary;
     order.push('generation');
@@ -81,8 +81,8 @@ test('the router streams every service event in order and yields the send and ba
   const events = await caller.generateFromList({ text: 'casa' });
 
   expect(await events.next()).toEqual({ done: false, value: { links: ['deck-1', 'deck-2'] } });
-  expect(await events.next()).toEqual({ done: false, value: { link: 'deck-1' } });
-  expect(await events.next()).toEqual({ done: false, value: { link: 'deck-2' } });
+  expect(await events.next()).toEqual({ done: false, value: { link: 'deck-1', title: 'Common Greetings' } });
+  expect(await events.next()).toEqual({ done: false, value: { link: 'deck-2', title: null } });
   expect(await events.next()).toEqual({ done: false,
     value: { result: { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 } } });
   expect(await events.next()).toEqual({ done: false, value: {

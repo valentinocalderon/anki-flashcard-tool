@@ -15,9 +15,12 @@ import type { createSpanishVoice } from './spanishVoice';
 import type { AskForJson } from './wordListExtractor';
 import { resolveWordList } from './wordListParser';
 
-export function dedupeItems(items: readonly BrainscapeItem[]): BrainscapeItem[] {
+type InputItem = BrainscapeItem & { source?: string };
+type DedupedItem = InputItem & { duplicate?: true };
+
+export function dedupeItems(items: readonly InputItem[]): DedupedItem[] {
   const seen = new Set<string>();
-  const result: BrainscapeItem[] = [];
+  const result: DedupedItem[] = [];
 
   for (const item of items) {
     const forms = item.forms.filter((form) => {
@@ -26,7 +29,7 @@ export function dedupeItems(items: readonly BrainscapeItem[]): BrainscapeItem[] 
       seen.add(query);
       return true;
     });
-    if (forms.length > 0) result.push({ forms });
+    result.push(forms.length > 0 ? { ...item, forms } : { ...item, duplicate: true });
   }
 
   return result;
@@ -44,7 +47,7 @@ async function* inputItems(
   ask: AskForJson,
   fetchImpl: typeof fetch,
   results: WordResult[],
-): AsyncGenerator<GenerationEvent, readonly BrainscapeItem[]> {
+): AsyncGenerator<GenerationEvent, readonly InputItem[]> {
   const packEvents = isPackSetUrl(text) ? fetchPackSetEvents(text.trim(), fetchImpl)
     : isPackUrl(text) ? fetchPackEvents(text.trim(), fetchImpl) : null;
   if (packEvents === null) {
@@ -53,21 +56,21 @@ async function* inputItems(
     }));
   }
 
-  const sides: string[] = [];
+  const sides: { side: string; source: string }[] = [];
   for await (const event of packEvents) {
     if ('links' in event) yield event;
     else {
-      sides.push(...event.sides);
-      yield { link: event.link };
+      sides.push(...event.sides.map((side) => ({ side, source: event.link })));
+      yield { link: event.link, title: event.title };
     }
   }
 
-  const items: BrainscapeItem[] = [];
-  for (const side of sides) {
+  const items: InputItem[] = [];
+  for (const { side, source } of sides) {
     try {
-      items.push(...spanishSideItems(side));
+      items.push(...spanishSideItems(side).map((item) => ({ ...item, source })));
     } catch (error) {
-      results.push(errorResult(side, error));
+      results.push({ ...errorResult(side, error), source });
     }
   }
   return items;
@@ -77,7 +80,7 @@ export type GenerationAudioReport = { unspeakable: number; message: string | nul
 type GenerationReport = Awaited<ReturnType<typeof generateForWords>>;
 export type GenerationEvent =
   | { links: string[] }
-  | { link: string }
+  | { link: string; title: string | null }
   | { result: WordResult }
   | GenerationReport;
 
@@ -206,16 +209,20 @@ export async function* generateForWordsEvents(
   const ask: AskForJson = (prompt, schema) => askForJson(prompt, schema, client);
   const results: WordResult[] = [];
   const audioFailures = new Map<string, string>();
-  const items: readonly BrainscapeItem[] = dedupeItems(yield* inputItems(text, ask, fetchImpl, results));
+  const items = dedupeItems(yield* inputItems(text, ask, fetchImpl, results));
   for (const result of results) yield { result };
 
   for (const item of items) {
+    const word = item.forms.map((form) => form.spanish).join(' / ');
     let result: WordResult;
     try {
-      result = await generateItem(db, item, lookup, voice, audioFailures);
+      result = item.duplicate
+        ? { word, status: 'duplicate', vocabCards: 0, conjugationCards: 0 }
+        : await generateItem(db, item, lookup, voice, audioFailures);
     } catch (error) {
-      result = errorResult(item.forms.map((form) => form.spanish).join(' / '), error);
+      result = errorResult(word, error);
     }
+    if (item.source !== undefined) result = { ...result, source: item.source };
     results.push(result);
     yield { result };
   }

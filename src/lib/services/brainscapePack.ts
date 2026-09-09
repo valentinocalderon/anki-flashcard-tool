@@ -48,18 +48,29 @@ function classContents(html: string, className: string): string | undefined {
   return undefined;
 }
 
-export function deckLinks(html: string, packId: string): string[] {
-  const links = new Set<string>();
-  for (const tag of html.matchAll(/<a\b[^>]*>/gi)) {
-    const href = attribute(tag[0], 'href');
-    if (href && /^\/flashcards\/[^/\s?#]+\/packs\/\d+$/.test(href) && href.endsWith(`/packs/${packId}`)) {
-      links.add(href);
-    }
-  }
-  return [...links];
+function htmlText(html: string): string {
+  const text = html
+    .replace(/<\/?(?:p|div|br|li|ul|ol|blockquote|h[1-6]|figure|figcaption|table|tr|td|th|section)\b[^>]*>/gi, ' ')
+    .replace(/<[^>]*>/g, '');
+  return decodeEntities(text).replace(/\s+/g, ' ').trim();
 }
 
-export function packSetLinks(html: string): string[] {
+type DeckLink = { href: string; title: string | null };
+
+export function deckLinks(html: string, packId: string): DeckLink[] {
+  const links = new Map<string, DeckLink>();
+  for (const tag of html.matchAll(/<a\b[^>]*>[\s\S]*?<\/a\s*>/gi)) {
+    const opening = tag[0].slice(0, tag[0].indexOf('>') + 1);
+    const href = attribute(opening, 'href');
+    if (href && /^\/flashcards\/[^/\s?#]+\/packs\/\d+$/.test(href) && href.endsWith(`/packs/${packId}`) && !links.has(href)) {
+      const title = classContents(tag[0], 'deck-item-title');
+      links.set(href, { href, title: title === undefined ? null : htmlText(title) });
+    }
+  }
+  return [...links.values()];
+}
+
+export function packSetLinks(html: string): DeckLink[] {
   const canonical = [...html.matchAll(/<link\b[^>]*>/gi)]
     .find((tag) => attribute(tag[0], 'rel') === 'canonical');
   const href = canonical && attribute(canonical[0], 'href');
@@ -107,10 +118,8 @@ export function spanishSides(html: string): string[] {
       .replace(/<p\b[^>]*>[\s\S]*?<\/p\s*>/gi, (paragraph) => {
         const opening = paragraph.slice(0, paragraph.indexOf('>') + 1);
         return hasClass(opening, 'scf-prompt') ? '' : paragraph;
-      })
-      .replace(/<\/?(?:p|div|br|li|ul|ol|blockquote|h[1-6]|figure|figcaption|table|tr|td|th|section)\b[^>]*>/gi, ' ')
-      .replace(/<[^>]*>/g, '');
-    const side = decodeEntities(text).replace(/\s+/g, ' ').trim();
+      });
+    const side = htmlText(text);
     if (side.length === 0) {
       throw new Error(`Card ${attribute(tag[0], 'id')} has no Spanish text; check the Brainscape HTML.`);
     }
@@ -160,11 +169,11 @@ async function readPage(pageUrl: string, fetchImpl: typeof fetch): Promise<strin
   }
 }
 
-type DeckEvent = { link: string; sides: string[] };
+type DeckEvent = { link: string; title: string | null; sides: string[] };
 export type PackEvent = { links: string[] } | DeckEvent;
 
-async function* fetchDecks(links: string[], pageUrl: URL, fetchImpl: typeof fetch, firstHtml?: string): AsyncGenerator<DeckEvent, void> {
-  for (const link of links) {
+async function* fetchDecks(links: DeckLink[], pageUrl: URL, fetchImpl: typeof fetch, firstHtml?: string): AsyncGenerator<DeckEvent, void> {
+  for (const { href: link, title } of links) {
     const deckUrl = new URL(link, pageUrl).href;
     let deckHtml = firstHtml;
     if (deckUrl !== pageUrl.href || deckHtml === undefined) {
@@ -175,7 +184,7 @@ async function* fetchDecks(links: string[], pageUrl: URL, fetchImpl: typeof fetc
     if (deckSides.length === 0) {
       throw new Error(`Brainscape deck ${deckUrl} contained ${deckSides.length} Spanish sides; check the page HTML.`);
     }
-    yield { link, sides: deckSides };
+    yield { link, title, sides: deckSides };
   }
 }
 
@@ -190,7 +199,7 @@ export async function* fetchPackEvents(url: string, fetchImpl: typeof fetch): As
   if (links.length === 0) {
     throw new Error(`Brainscape page ${packUrl.href} contained ${links.length} deck links for pack ${packId}; check the page HTML.`);
   }
-  yield { links };
+  yield { links: links.map(({ href }) => href) };
   yield* fetchDecks(links, packUrl, fetchImpl, html);
 }
 
@@ -198,7 +207,7 @@ export async function* fetchPackSetEvents(url: string, fetchImpl: typeof fetch):
   const packSetUrl = new URL(url);
   const html = await readPage(packSetUrl.href, fetchImpl);
   const links = packSetLinks(html);
-  yield { links };
+  yield { links: links.map(({ href }) => href) };
   yield* fetchDecks(links, packSetUrl, fetchImpl);
 }
 

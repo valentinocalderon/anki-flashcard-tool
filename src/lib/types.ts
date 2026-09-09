@@ -18,10 +18,11 @@ export type Card = {
 
 export type WordResult = {
   word: string;
+  source?: string;
   vocabCards: number;
   conjugationCards: number;
 } & (
-  | { status: 'added' | 'updated' | 'exists' | 'skipped'; message?: string }
+  | { status: 'added' | 'updated' | 'exists' | 'skipped' | 'duplicate'; message?: string }
   | { status: 'error'; message: string }
 );
 

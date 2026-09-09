@@ -4,6 +4,7 @@ export function formatResultLine(result: WordResult): string {
   if (result.status === 'error') return result.message;
   if (result.status === 'exists') return 'already stored';
   if (result.status === 'skipped') return 'skipped: already stored';
+  if (result.status === 'duplicate') return 'skipped: duplicate in this run';
 
   const parts: string[] = [];
   if (result.vocabCards > 0) {

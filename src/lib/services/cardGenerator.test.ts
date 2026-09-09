@@ -56,7 +56,7 @@ const farewellInfos: Record<string, WordInfo> = {
 };
 
 function lookedUpItems(sides: string[], infos: Readonly<Record<string, WordInfo>>) {
-  return dedupeItems(sides.flatMap(spanishSideItems)).map((item) => ({
+  return dedupeItems(sides.flatMap(spanishSideItems)).filter((item) => !item.duplicate).map((item) => ({
     forms: item.forms.map((form) => {
       const info = infos[form.query];
       if (!info) throw new Error(`Missing lookup fixture for "${form.query}"`);

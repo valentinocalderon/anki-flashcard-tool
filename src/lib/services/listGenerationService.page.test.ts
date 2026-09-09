@@ -416,11 +416,11 @@ test.each([true, false])('the page streams progress and stays pending until comp
     await first.promise;
     if (pack) {
       yield { links };
-      yield { link: 'deck-1' };
+      yield { link: 'deck-1', title: 'Common Greetings' };
     }
     yield { result: results[0] };
     await second.promise;
-    if (pack) yield { link: 'deck-2' };
+    if (pack) yield { link: 'deck-2', title: null };
     yield { result: results[1] };
     await summary.promise;
     yield { results, capReached: true, audio: { unspeakable: 1, message: 'Cannot speak this card.' } };

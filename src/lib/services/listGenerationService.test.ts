@@ -96,6 +96,20 @@ const packSetUrl = 'https://www.brainscape.com/p/5M6OW-LH-D10NR';
 const singleDeckUrl = 'https://www.brainscape.com/flashcards/test/packs/42';
 const pack = readFileSync(new URL('./__fixtures__/brainscape/pack.html', import.meta.url), 'utf8');
 const packSet = readFileSync(new URL('./__fixtures__/brainscape/packset.html', import.meta.url), 'utf8');
+const packLinks = [
+  '/flashcards/011-common-greetings-14150191/packs/21648778',
+  '/flashcards/012-nouns-articles-14150195/packs/21648778',
+  '/flashcards/013-adjectives-14150196/packs/21648778',
+  '/flashcards/021-basic-conversation-14150198/packs/21648778',
+  '/flashcards/022-pronouns-origins-14150199/packs/21648778',
+  '/flashcards/023-family-friends-14150203/packs/21648778',
+  '/flashcards/031-numbers-money-14150204/packs/21648778',
+  '/flashcards/032-days-14150207/packs/21648778',
+  '/flashcards/033-time-14150209/packs/21648778',
+  '/flashcards/034-food-drinks-14150212/packs/21648778',
+  '/flashcards/035-getting-around-14150217/packs/21648778',
+  '/flashcards/041-pronunciation-gotchas-14150221/packs/21648778',
+];
 const packSetLinks = [
   '/flashcards/38-vocabulary-level-2-part-1-level-2-bas-15113057/packs/21882519',
   '/flashcards/39-verbs-level-2-part-1-level-2-basic-15113060/packs/21882519',
@@ -113,6 +127,24 @@ const packSetLinks = [
   '/flashcards/60-vocabulary-level-2-basic-part-3-level-15113083/packs/21882519',
   '/flashcards/61-be-going-to-level-2-basic-15113084/packs/21882519',
   '/flashcards/63-window-words-2-level-2-basic-15113086/packs/21882519',
+];
+const packSetTitles = [
+  '38.- Vocabulary Level 2 - Part 1 - Level 2 (basic)',
+  '39.- Verbs Level 2 - Part 1 - Level 2 (basic)',
+  '40.- The numbers - Level 2 (basic)',
+  '42.- The time - Level 2 (basic)',
+  '44.- Possessives 1 - Level 2 (basic)',
+  '46.- Expressing possession with "DE" - Level 2 (basic)',
+  '48.- To have, to have to - Level 2 (basic)',
+  "50.- Can, can't - Level 2 (basic)",
+  '52.- Vocabulary Level 2 - Part 2 - Level 2 (basic)',
+  '53.- Verbs Level 2 - Part 2 - Level 2 (basic)',
+  '54.- Demonstratives - Level 2 (basic)',
+  '56.- To want, to prefer, to need - Level 2 (basic)',
+  '58.- I like, I love, I’m interested in - Level 2 (basic)',
+  '60.- Vocabulary level 2 (basic) - Part 3 -Level 2 ( basic)',
+  '61.- Be going to - Level 2 (basic)',
+  '63.- Window words 2 - Level 2 (basic)',
 ];
 const greetings = readFileSync(new URL('./__fixtures__/brainscape/deck-common-greetings.html', import.meta.url), 'utf8');
 const nouns = readFileSync(new URL('./__fixtures__/brainscape/deck-nouns-articles.html', import.meta.url), 'utf8');
@@ -245,7 +277,25 @@ afterEach(() => {
   expect(askForJson).not.toHaveBeenCalled();
 });
 
-test('generation events yield all pack-set links and landed decks before deduped errors, folds and skipped items', async () => {
+test('generation events forward the title from the saved pack-set anchor', async () => {
+  vi.useFakeTimers();
+  fetchImpl.mockResolvedValueOnce(new Response(packSet)).mockResolvedValueOnce(new Response(greetings));
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>();
+  const events = generateForWordsEvents(db, packSetUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  expect(await events.next()).toEqual({ done: false, value: { links: packSetLinks } });
+  const next = events.next();
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(await next).toEqual({ done: false, value: {
+    link: '/flashcards/38-vocabulary-level-2-part-1-level-2-bas-15113057/packs/21882519',
+    title: '38.- Vocabulary Level 2 - Part 1 - Level 2 (basic)',
+  } });
+  await events.return({ results: [], capReached: false, audio: { unspeakable: 0, message: null } });
+  expect(lookup).not.toHaveBeenCalled();
+  expect(fetchImpl).toHaveBeenCalledTimes(2);
+});
+
+test('generation events carry sources after all pack-set links and landed decks for errors, folds, skips and duplicates', async () => {
   vi.useFakeTimers();
   await db.insert(words).values([
     { id: 1, query: '¡adiós!', info: JSON.stringify(goodbye), lookedUpAt: 123 },
@@ -264,21 +314,25 @@ test('generation events yield all pack-set links and landed decks before deduped
 
   expect(await events.next()).toEqual({ done: false, value: { links: packSetLinks } });
   expect(fetchImpl).toHaveBeenCalledOnce();
-  for (const link of packSetLinks) {
+  for (const [index, link] of packSetLinks.entries()) {
     const next = events.next();
     await vi.advanceTimersByTimeAsync(1000);
-    expect(await next).toEqual({ done: false, value: { link } });
+    expect(await next).toEqual({ done: false, value: { link, title: packSetTitles[index] } });
     expect(fetchImpl).toHaveBeenLastCalledWith(`https://www.brainscape.com${link}`, expect.any(Object));
     expect(lookup).not.toHaveBeenCalled();
   }
   expect(fetchImpl).toHaveBeenCalledTimes(17);
   const expectedResults: WordResult[] = [
-    { word: '¡Hola! /', status: 'error', vocabCards: 0, conjugationCards: 0,
+    { word: '¡Hola! /', source: packSetLinks[2], status: 'error', vocabCards: 0, conjugationCards: 0,
       message: 'Spanish side "¡Hola! /" has an empty form at position 2; check the Brainscape text.' },
-    { word: '¡Hola! /', status: 'error', vocabCards: 0, conjugationCards: 0,
+    { word: '¡Hola! /', source: packSetLinks[15], status: 'error', vocabCards: 0, conjugationCards: 0,
       message: 'Spanish side "¡Hola! /" has an empty form at position 2; check the Brainscape text.' },
-    { word: '¡Adiós! / ¡Chao!', status: 'updated', vocabCards: 0, conjugationCards: 0 },
-    { word: 'Casa', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
+    { word: '¡Adiós! / ¡Chao!', source: packSetLinks[0], status: 'updated', vocabCards: 0, conjugationCards: 0 },
+    { word: '¡CHAO!', source: packSetLinks[1], status: 'duplicate', vocabCards: 0, conjugationCards: 0 },
+    { word: 'Casa', source: packSetLinks[3], status: 'skipped', vocabCards: 0, conjugationCards: 0 },
+    ...packSetLinks.slice(4, 15).map((source): WordResult => ({
+      word: 'casa', source, status: 'duplicate', vocabCards: 0, conjugationCards: 0,
+    })),
   ];
   for (const result of expectedResults) {
     expect(await events.next()).toEqual({ done: false, value: { result } });
@@ -303,9 +357,9 @@ test('generation events reuse a single pack deck before yielding its result and 
     db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl),
   ))).toEqual([
     { links: ['/flashcards/test/packs/42'] },
-    { link: '/flashcards/test/packs/42' },
-    { result: { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 } },
-    { results: [{ word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 }],
+    { link: '/flashcards/test/packs/42', title: null },
+    { result: { word: 'casa', source: '/flashcards/test/packs/42', status: 'added', vocabCards: 2, conjugationCards: 0 } },
+    { results: [{ word: 'casa', source: '/flashcards/test/packs/42', status: 'added', vocabCards: 2, conjugationCards: 0 }],
       capReached: false, audio: { unspeakable: 0, message: null } },
   ]);
   expect(fetchImpl.mock.calls.filter(([, init]) => init?.method !== 'POST')).toHaveLength(1);
@@ -408,6 +462,7 @@ test.each(['request', 'body'])('generation events retain landed deck progress an
   await vi.advanceTimersByTimeAsync(1000);
   expect(await firstDeck).toEqual({ done: false, value: {
     link: '/flashcards/38-vocabulary-level-2-part-1-level-2-bas-15113057/packs/21882519',
+    title: '38.- Vocabulary Level 2 - Part 1 - Level 2 (basic)',
   } });
   const assertion = expect(events.next()).rejects.toBe(error);
   await vi.runAllTimersAsync();
@@ -480,8 +535,11 @@ test('dedupes normalized forms within and across items while preserving alternat
       { spanish: '¡Chao!', query: '¡chao!' },
     ] },
     { forms: [{ spanish: 'Hasta luego', query: 'hasta luego' }] },
+    { forms: [{ spanish: 'HASTA LUEGO', query: 'hasta luego' }], duplicate: true },
     { forms: [{ spanish: 'ÁRBOL', query: 'árbol' }] },
+    { forms: [{ spanish: 'árbol', query: 'árbol' }], duplicate: true },
     { forms: [{ spanish: '¡Hola! ¡Buenas!', query: '¡hola! ¡buenas!' }] },
+    { forms: [{ spanish: '¡HOLA! ¡BUENAS!', query: '¡hola! ¡buenas!' }], duplicate: true },
   ]);
   expect(items[0]?.forms).toHaveLength(3);
   expect(items).toHaveLength(7);
@@ -490,7 +548,7 @@ test('dedupes normalized forms within and across items while preserving alternat
 test.each([
   'https://www.brainscape.com/packs/21648778',
   'https://www.brainscape.com/packs/21648778/',
-])('runs a lone pack URL through the saved decks with one result per deduped item: %s', async (url) => {
+])('runs a lone pack URL through the saved decks with a sourced result for every item: %s', async (url) => {
   vi.useFakeTimers();
   fetchImpl.mockResolvedValueOnce(new Response(pack)).mockResolvedValueOnce(new Response(greetings));
   for (let deck = 0; deck < 11; deck += 1) fetchImpl.mockResolvedValueOnce(new Response(nouns));
@@ -503,7 +561,11 @@ test.each([
   const run = generateForWords(db, ` \n${url}\t `, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
   await vi.runAllTimersAsync();
 
-  expect((await run).results).toEqual(packWords.map((word) => ({ word, status: 'added', vocabCards: 1, conjugationCards: 0 })));
+  expect((await run).results).toEqual(packLinks.flatMap((source, index) =>
+    (index === 0 ? packWords.slice(0, 17) : packWords.slice(17)).map((word) => ({
+      word, source, status: index < 2 ? 'added' : 'duplicate', vocabCards: index < 2 ? 1 : 0, conjugationCards: 0,
+    })),
+  ));
   expect(lookup.mock.calls.flat()).toEqual(packForms);
   expect(fetchImpl).toHaveBeenCalledTimes(50);
   expect(fetchImpl).toHaveBeenNthCalledWith(1, url, expect.any(Object));
@@ -528,7 +590,11 @@ test.each([packSetUrl, `${packSetUrl}/`])('routes a lone pack-set URL through th
   const run = generateForWords(db, ` \n${url}\t `, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
   await vi.runAllTimersAsync();
 
-  expect((await run).results).toEqual(packWords.map((word) => ({ word, status: 'added', vocabCards: 1, conjugationCards: 0 })));
+  expect((await run).results).toEqual(packSetLinks.flatMap((source, index) =>
+    (index === 0 ? packWords.slice(0, 17) : packWords.slice(17)).map((word) => ({
+      word, source, status: index < 2 ? 'added' : 'duplicate', vocabCards: index < 2 ? 1 : 0, conjugationCards: 0,
+    })),
+  ));
   expect(lookup.mock.calls.flat()).toEqual(packForms);
   expect(fetchImpl).toHaveBeenCalledTimes(54);
   expect(fetchImpl).toHaveBeenNthCalledWith(1, url, expect.any(Object));
@@ -537,7 +603,7 @@ test.each([packSetUrl, `${packSetUrl}/`])('routes a lone pack-set URL through th
   expect(vi.getTimerCount()).toBe(0);
 });
 
-test('a pack-set reports one result per item in deck order after silently dropping a duplicate from a second deck', async () => {
+test('a pack-set reports a duplicate from a second deck with its own source and skipped mark', async () => {
   vi.useFakeTimers();
   servePackSet([
     'casa', 'CASA', 'árbol', 'perro', 'gato', 'libro', 'mesa', 'silla',
@@ -558,13 +624,78 @@ test('a pack-set reports one result per item in deck order after silently droppi
   expect(await db.select({ front: cards.front }).from(cards).where(eq(cards.front, 'casa'))).toEqual([{ front: 'casa' }]);
   expect(results).toEqual([
     { word: 'casa', status: 'added', vocabCards: 1, conjugationCards: 0 },
+    { word: 'CASA', status: 'duplicate', vocabCards: 0, conjugationCards: 0 },
     ...['árbol', 'perro', 'gato', 'libro', 'mesa', 'silla', 'puerta', 'ventana', 'agua', 'pan', 'leche', 'calle', 'ciudad', 'sol']
       .map((word) => ({ word, status: 'added', vocabCards: 1, conjugationCards: 0 })),
-  ]);
-  expect(results).toHaveLength(15);
+  ].map((result, index) => ({ ...result, source: packSetLinks[index] })));
+  expect(results).toHaveLength(16);
   const html = renderToStaticMarkup(pageWithResults(results));
-  expect(html.match(/<li\b/g)).toHaveLength(15);
-  expect(html).not.toContain('<strong>CASA</strong>');
+  expect(html.match(/<li\b/g)).toHaveLength(16);
+  expect(html).toContain('<span aria-hidden="true" class="text-xs mr-2">–</span><strong>CASA</strong>: skipped: duplicate in this run');
+});
+
+test('a partly duplicated item keeps its new form and deck source, then reports a wholly duplicated group', async () => {
+  serveSides(['casa / CASA', 'CASA / hogar', 'CASA / HOGAR']);
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>()
+    .mockResolvedValueOnce(noun).mockResolvedValueOnce({ ...noun, spanish: 'hogar', english: 'home', example: null });
+
+  expect((await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results)
+    .toEqual([
+      { word: 'casa', source: '/flashcards/test/packs/42', status: 'added', vocabCards: 2, conjugationCards: 0 },
+      { word: 'hogar', source: '/flashcards/test/packs/42', status: 'added', vocabCards: 1, conjugationCards: 0 },
+      { word: 'CASA / HOGAR', source: '/flashcards/test/packs/42', status: 'duplicate', vocabCards: 0, conjugationCards: 0 },
+    ]);
+  expect(lookup.mock.calls).toEqual([['casa'], ['hogar']]);
+  expect(await db.select({ front: cards.front }).from(cards).orderBy(cards.id)).toEqual([
+    { front: 'house' }, { front: 'La ____ es grande.' }, { front: 'home' },
+  ]);
+});
+
+test('a second run over the saved pack-set fixtures skips every item without lookups or storage', async () => {
+  vi.useFakeTimers();
+  const laterWords = ['árbol', 'perro', 'gato', 'libro', 'mesa', 'silla', 'puerta', 'ventana', 'agua', 'pan', 'leche', 'calle', 'ciudad', 'sol'];
+  const serve = () => {
+    fetchImpl.mockResolvedValueOnce(new Response(packSet))
+      .mockResolvedValueOnce(new Response(greetings)).mockResolvedValueOnce(new Response(nouns));
+    for (const word of laterWords) serveSides([word]);
+  };
+  const expectedItems = [
+    ...packWords.map((word, index) => ({ word, source: packSetLinks[index < 17 ? 0 : 1] })),
+    ...laterWords.map((word, index) => ({ word, source: packSetLinks[index + 2] })),
+  ];
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>().mockImplementation(async (word) => ({
+    ...noun, spanish: word, english: word, article: null, example: null,
+  }));
+  serve();
+  const first = generateForWords(db, packSetUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+  await vi.runAllTimersAsync();
+  expect((await first).results)
+    .toEqual(expectedItems.map((item) => ({ ...item, status: 'added', vocabCards: 1, conjugationCards: 0 })));
+  expect(lookup.mock.calls.flat()).toEqual([...packForms, ...laterWords]);
+  const stored = await db.select().from(cards).orderBy(cards.id);
+  lookup.mockClear();
+  const cached = vi.spyOn(lookupCache, 'cachedLookup');
+  const generate = vi.spyOn(cardGenerator, 'generateCards');
+  const store = vi.spyOn(cardStore, 'storeCards');
+  serve();
+
+  const second = generateForWords(db, packSetUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+  await vi.runAllTimersAsync();
+  expect((await second).results)
+    .toEqual(expectedItems.map((item) => ({ ...item, status: 'skipped', vocabCards: 0, conjugationCards: 0 })));
+  expect(lookup).not.toHaveBeenCalled();
+  expect(cached).not.toHaveBeenCalled();
+  expect(generate).not.toHaveBeenCalled();
+  expect(store).not.toHaveBeenCalled();
+  expect(await db.select().from(cards).orderBy(cards.id)).toEqual(stored);
+});
+
+test('a word list result has no source link', async () => {
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>().mockResolvedValue(noun);
+  const { results } = await generateForWords(db, 'casa', lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  expect(results).toStrictEqual([{ word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 }]);
+  expect(results[0]).not.toHaveProperty('source');
 });
 
 test('a pack-set skips a word already carded by an earlier run without lookup and keeps its place in deck order', async () => {
@@ -596,7 +727,7 @@ test('a pack-set skips a word already carded by an earlier run without lookup an
     { word: 'CASA', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
     ...['perro', 'gato', 'libro', 'mesa', 'silla', 'puerta', 'ventana', 'agua', 'pan', 'leche', 'calle', 'ciudad', 'playa', 'sol']
       .map((word) => ({ word, status: 'added', vocabCards: 1, conjugationCards: 0 })),
-  ]);
+  ].map((result, index) => ({ ...result, source: packSetLinks[index] })));
   expect(await db.select({ front: cards.front }).from(cards).where(eq(cards.wordId, 1))).toEqual([{ front: 'casa' }]);
 });
 
@@ -615,10 +746,12 @@ test('a pack-set reports a rejected Spanish side from a later deck before every 
   const { results } = await run;
 
   expect(results).toEqual([
-    { word: '¡Hola! /', status: 'error', vocabCards: 0, conjugationCards: 0,
+    { word: '¡Hola! /', source: '/flashcards/53-verbs-level-2-part-2-level-2-basic-15113078/packs/21882519',
+      status: 'error', vocabCards: 0, conjugationCards: 0,
       message: 'Spanish side "¡Hola! /" has an empty form at position 2; check the Brainscape text.' },
     ...['agua', 'árbol', 'perro', 'gato', 'libro', 'mesa', 'silla', 'puerta', 'ventana', 'pan', 'leche', 'calle', 'ciudad', 'playa', 'sol']
-      .map((word) => ({ word, status: 'added', vocabCards: 1, conjugationCards: 0 })),
+      .map((word, index) => ({ word, source: packSetLinks[index < 9 ? index : index + 1],
+        status: 'added', vocabCards: 1, conjugationCards: 0 })),
   ]);
   expect(lookup.mock.calls.flat()).toEqual([
     'agua', 'árbol', 'perro', 'gato', 'libro', 'mesa', 'silla', 'puerta',
@@ -687,11 +820,12 @@ test('reports one malformed-side error and still generates the following deduped
 
   expect((await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results).toEqual([
     {
-      word: '¡Hola! /', status: 'error', vocabCards: 0, conjugationCards: 0,
+      word: '¡Hola! /', source: '/flashcards/test/packs/42', status: 'error', vocabCards: 0, conjugationCards: 0,
       message: 'Spanish side "¡Hola! /" has an empty form at position 2; check the Brainscape text.',
     },
-    { word: 'Casa', status: 'added', vocabCards: 2, conjugationCards: 0 },
-    { word: 'árbol', status: 'added', vocabCards: 1, conjugationCards: 0 },
+    { word: 'Casa', source: '/flashcards/test/packs/42', status: 'added', vocabCards: 2, conjugationCards: 0 },
+    { word: 'Casa', source: '/flashcards/test/packs/42', status: 'duplicate', vocabCards: 0, conjugationCards: 0 },
+    { word: 'árbol', source: '/flashcards/test/packs/42', status: 'added', vocabCards: 1, conjugationCards: 0 },
   ]);
   expect(lookup.mock.calls).toEqual([['Casa'], ['árbol']]);
   expect(await db.select().from(cards)).toHaveLength(3);
@@ -704,11 +838,11 @@ test('renders two identical malformed sides as two visible result lines with dis
   const results = (await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results;
   expect(results).toEqual([
     {
-      word: '¡Hola! /', status: 'error', vocabCards: 0, conjugationCards: 0,
+      word: '¡Hola! /', source: '/flashcards/test/packs/42', status: 'error', vocabCards: 0, conjugationCards: 0,
       message: 'Spanish side "¡Hola! /" has an empty form at position 2; check the Brainscape text.',
     },
     {
-      word: '¡Hola! /', status: 'error', vocabCards: 0, conjugationCards: 0,
+      word: '¡Hola! /', source: '/flashcards/test/packs/42', status: 'error', vocabCards: 0, conjugationCards: 0,
       message: 'Spanish side "¡Hola! /" has an empty form at position 2; check the Brainscape text.',
     },
   ]);
@@ -745,7 +879,7 @@ test.each([
 
   const results = (await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results;
   expect(results).toEqual([
-    { word: 'casa / hogar', status: 'updated', vocabCards: 0, conjugationCards: 0 },
+    { word: 'casa / hogar', source: '/flashcards/test/packs/42', status: 'updated', vocabCards: 0, conjugationCards: 0 },
   ]);
   expect(renderToStaticMarkup(pageWithResults(results)).match(/<li\b[^>]*>.*?<\/li>/g)).toEqual([
     '<li class="bg-gray-100 p-3 rounded"><span aria-hidden="true" class="text-xs mr-2">↻</span><strong>casa / hogar</strong>: updated: stored card changed; check Anki if this card was already sent</li>',
@@ -773,7 +907,7 @@ test.each([
   store.mockClear();
   serveSides(['casa / hogar']);
   expect((await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results).toEqual([
-    { word: 'casa / hogar', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
+    { word: 'casa / hogar', source: '/flashcards/test/packs/42', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
   ]);
   expect((await generateForWords(db, 'CASA\nHOGAR', lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results).toEqual([
     { word: 'CASA', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
@@ -810,7 +944,7 @@ test.each(['word query', 'recorded form'])(
 
     expect(results).toEqual([
       {
-        word: 'Hasta luego / ¡Adiós! / ¡Chao!', status: 'error', vocabCards: 0, conjugationCards: 0,
+        word: 'Hasta luego / ¡Adiós! / ¡Chao!', source: '/flashcards/test/packs/42', status: 'error', vocabCards: 0, conjugationCards: 0,
         message: 'Cannot fold "Hasta luego / ¡Adiós! / ¡Chao!": its forms are already owned by 2 different basic cards; card the forms one at a time.',
       },
     ]);
@@ -843,7 +977,7 @@ test('skips an all-forms-carded fold even when different basic cards own its for
   const lookup = vi.fn<(word: string) => Promise<WordInfo>>();
 
   expect((await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results).toEqual([
-    { word: '¡Adiós! / ¡Chao!', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
+    { word: '¡Adiós! / ¡Chao!', source: '/flashcards/test/packs/42', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
   ]);
   expect(cached).not.toHaveBeenCalled();
   expect(lookup).not.toHaveBeenCalled();
@@ -876,7 +1010,7 @@ test.each(['success', 'throw', 'payload'])(
     expect(lookup).toHaveBeenCalledExactlyOnceWith('Hasta luego');
     if (outcome === 'success') {
       expect(results).toEqual([
-        { word: '¡Adiós! / ¡Chao! / Hasta luego', status: 'updated', vocabCards: 0, conjugationCards: 0 },
+        { word: '¡Adiós! / ¡Chao! / Hasta luego', source: '/flashcards/test/packs/42', status: 'updated', vocabCards: 0, conjugationCards: 0 },
       ]);
       expect(await db.select().from(cards)).toEqual([{
         ...owner, ...goodbyeAudio, back: '¡Adiós! / ¡Chao! / Hasta luego', forms: [
@@ -887,7 +1021,8 @@ test.each(['success', 'throw', 'payload'])(
     } else {
       expect(results).toEqual([
         {
-          word: '¡Adiós! / ¡Chao! / Hasta luego', status: 'error', vocabCards: 0, conjugationCards: 0,
+          word: '¡Adiós! / ¡Chao! / Hasta luego', source: '/flashcards/test/packs/42',
+          status: 'error', vocabCards: 0, conjugationCards: 0,
           message: outcome === 'throw' ? 'Lookup timed out after 1000 ms' : 'Lookup returned HTTP 503',
         },
       ]);
@@ -910,7 +1045,7 @@ test('enriches a carded goodbye in place with its pack alternative, preserving t
 
   const results = (await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results;
   expect(results).toEqual([
-    { word: '¡Adiós! / ¡Chao!', status: 'updated', vocabCards: 0, conjugationCards: 0 },
+    { word: '¡Adiós! / ¡Chao!', source: '/flashcards/test/packs/42', status: 'updated', vocabCards: 0, conjugationCards: 0 },
   ]);
   expect(await store.mock.results[0]?.value).toEqual({ vocabCards: 0, conjugationCards: 0, updatedCards: 1 });
   expect(await db.select().from(cards)).toEqual([{
@@ -948,7 +1083,7 @@ test('preserves a sent synonym card when a partly carded pack item collides with
   const store = vi.spyOn(cardStore, 'storeCards');
 
   expect((await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results).toEqual([
-    { word: 'el carro / el auto', status: 'exists', vocabCards: 0, conjugationCards: 0 },
+    { word: 'el carro / el auto', source: '/flashcards/test/packs/42', status: 'exists', vocabCards: 0, conjugationCards: 0 },
   ]);
   expect(await store.mock.results[0]?.value).toEqual({ vocabCards: 0, conjugationCards: 0, updatedCards: 0 });
   expect(await db.select().from(cards).orderBy(cards.id)).toEqual(storedBeforePack);
@@ -968,7 +1103,7 @@ test('enriches the owning card when an unrelated card already has the folded fro
     .mockResolvedValue({ ...noun, english: 'home', spanish: 'hogar', example: null });
 
   expect((await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results).toEqual([
-    { word: 'casa / hogar', status: 'updated', vocabCards: 0, conjugationCards: 0 },
+    { word: 'casa / hogar', source: '/flashcards/test/packs/42', status: 'updated', vocabCards: 0, conjugationCards: 0 },
   ]);
   expect(await db.select().from(cards).orderBy(cards.id)).toEqual([
     { ...owner, ...houseAudio, back: 'casa / hogar', forms: [
@@ -985,11 +1120,11 @@ test('resolves a later fold through a recorded secondary form and retains earlie
     .mockResolvedValueOnce({ ...goodbye, english: 'bye', spanish: '¡Chao!' })
     .mockResolvedValueOnce({ ...goodbye, english: 'see you later', spanish: 'Hasta luego' });
   expect((await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results).toEqual([
-    { word: '¡Adiós! / ¡Chao!', status: 'added', vocabCards: 1, conjugationCards: 0 },
+    { word: '¡Adiós! / ¡Chao!', source: '/flashcards/test/packs/42', status: 'added', vocabCards: 1, conjugationCards: 0 },
   ]);
   serveSides(['¡Chao! / Hasta luego']);
   expect((await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results).toEqual([
-    { word: '¡Chao! / Hasta luego', status: 'updated', vocabCards: 0, conjugationCards: 0 },
+    { word: '¡Chao! / Hasta luego', source: '/flashcards/test/packs/42', status: 'updated', vocabCards: 0, conjugationCards: 0 },
   ]);
   expect(await db.select().from(cards)).toEqual([expect.objectContaining({
     id: 1, wordId: 1, front: 'goodbye / bye', back: '¡Chao! / Hasta luego / ¡Adiós!',
@@ -1034,8 +1169,8 @@ test.each(['throw', 'payload'])('retains a committed enrichment when the next lo
   else lookup.mockResolvedValueOnce({ ...noun, error: 'Lookup returned HTTP 503' });
 
   expect((await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results).toEqual([
-    { word: '¡Adiós! / ¡Chao!', status: 'updated', vocabCards: 0, conjugationCards: 0 },
-    { word: 'casa / hogar', status: 'error', vocabCards: 0, conjugationCards: 0,
+    { word: '¡Adiós! / ¡Chao!', source: '/flashcards/test/packs/42', status: 'updated', vocabCards: 0, conjugationCards: 0 },
+    { word: 'casa / hogar', source: '/flashcards/test/packs/42', status: 'error', vocabCards: 0, conjugationCards: 0,
       message: failure === 'throw' ? 'Lookup timed out after 1000 ms' : 'Lookup returned HTTP 503' },
   ]);
   expect(await db.select().from(cards)).toEqual([{
@@ -1062,10 +1197,10 @@ test('reports a missing second form cache row without enriching and continues th
 
   expect((await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results).toEqual([
     {
-      word: '¡Adiós! / ¡Chao!', status: 'error', vocabCards: 0, conjugationCards: 0,
+      word: '¡Adiós! / ¡Chao!', source: '/flashcards/test/packs/42', status: 'error', vocabCards: 0, conjugationCards: 0,
       message: 'Cached word "¡Chao!" is missing; check lookup cache persistence and retry.',
     },
-    { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 },
+    { word: 'casa', source: '/flashcards/test/packs/42', status: 'added', vocabCards: 2, conjugationCards: 0 },
   ]);
   expect(await db.select().from(cards).where(eq(cards.id, 1))).toEqual([{ ...storedGoodbye, ...goodbyeAudio }]);
   expect((await db.select().from(cards).orderBy(cards.id)).map(({ front }) => front)).toEqual([
@@ -1085,7 +1220,7 @@ test('records missing forms even when the basic back matches and leaves conjugat
   serveSides(['ir / marchar']);
 
   expect((await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results).toEqual([
-    { word: 'ir / marchar', status: 'updated', vocabCards: 0, conjugationCards: 0 },
+    { word: 'ir / marchar', source: '/flashcards/test/packs/42', status: 'updated', vocabCards: 0, conjugationCards: 0 },
   ]);
   expect((await db.select().from(cards).orderBy(cards.id)).map(({ front, back }) => ({ front, back }))).toEqual([
     { front: 'to go', back: 'ir / marchar' },
@@ -1105,7 +1240,7 @@ test('skips the same pack item twice before lookup, generation or storage', asyn
   const lookup = vi.fn<(word: string) => Promise<WordInfo>>().mockResolvedValue(goodbye);
   serveSides(['¡Adiós! / ¡Chao!']);
   expect((await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results).toEqual([
-    { word: '¡Adiós! / ¡Chao!', status: 'added', vocabCards: 1, conjugationCards: 0 },
+    { word: '¡Adiós! / ¡Chao!', source: '/flashcards/test/packs/42', status: 'added', vocabCards: 1, conjugationCards: 0 },
   ]);
   await db.update(cards).set({ ankiNoteId: 987654, sentAt: 456, createdAt: 123 }).where(eq(cards.id, 1));
   await client.execute(`
@@ -1116,7 +1251,7 @@ test('skips the same pack item twice before lookup, generation or storage', asyn
   const store = vi.spyOn(cardStore, 'storeCards');
 
   expect((await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results).toEqual([
-    { word: '¡Adiós! / ¡Chao!', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
+    { word: '¡Adiós! / ¡Chao!', source: '/flashcards/test/packs/42', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
   ]);
   expect(store).not.toHaveBeenCalled();
   expect(await db.select().from(cards)).toEqual([{
@@ -1130,7 +1265,7 @@ test.each(['¡adiós!', '¡CHAO!'])('skips standalone %s after its richer pack i
   const lookup = vi.fn<(word: string) => Promise<WordInfo>>().mockResolvedValue(goodbye);
   serveSides(['¡Adiós! / ¡Chao!']);
   expect((await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results).toEqual([
-    { word: '¡Adiós! / ¡Chao!', status: 'added', vocabCards: 1, conjugationCards: 0 },
+    { word: '¡Adiós! / ¡Chao!', source: '/flashcards/test/packs/42', status: 'added', vocabCards: 1, conjugationCards: 0 },
   ]);
   await db.update(cards).set({ ankiNoteId: 987654, sentAt: 456, createdAt: 123 }).where(eq(cards.id, 1));
   const store = vi.spyOn(cardStore, 'storeCards');
@@ -1162,7 +1297,7 @@ test('asks to check Anki if already sent and shows inserted counts when an item 
 
   const results = (await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results;
   expect(results).toEqual([
-    { word: 'hablar / platicar', status: 'updated', vocabCards: 0, conjugationCards: 2 },
+    { word: 'hablar / platicar', source: '/flashcards/test/packs/42', status: 'updated', vocabCards: 0, conjugationCards: 2 },
   ]);
   expect(await store.mock.results[0]?.value).toEqual({ vocabCards: 0, conjugationCards: 2, updatedCards: 1 });
   expect((await db.select().from(cards).orderBy(cards.id)).map(({ back }) => back)).toEqual([
@@ -1189,8 +1324,8 @@ test('reports a rejected enrichment, preserves the stored note and cache, and pr
   const results = (await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results;
 
   expect(results).toEqual([
-    expect.objectContaining({ word: '¡Adiós! / ¡Chao!', status: 'error', vocabCards: 0, conjugationCards: 0 }),
-    { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 },
+    expect.objectContaining({ word: '¡Adiós! / ¡Chao!', source: '/flashcards/test/packs/42', status: 'error', vocabCards: 0, conjugationCards: 0 }),
+    { word: 'casa', source: '/flashcards/test/packs/42', status: 'added', vocabCards: 2, conjugationCards: 0 },
   ]);
   expect(results[0]?.message).toContain('update "cards" set "back" = ?, "forms" = ?, "audio_file" = ?, "audio_mp3" = ?, "audio_sent_at" = ? where "cards"."id" = ?');
   expect(await db.select().from(cards).where(eq(cards.id, 1))).toEqual([{ ...storedGoodbye, ...goodbyeAudio }]);
@@ -1217,7 +1352,7 @@ test('skips a group only when every normalized form has a card', async () => {
   const generate = vi.spyOn(cardGenerator, 'generateCards');
 
   expect((await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results).toEqual([
-    { word: 'CASA / Hogar', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
+    { word: 'CASA / Hogar', source: '/flashcards/test/packs/42', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
   ]);
   expect(cached).not.toHaveBeenCalled();
   expect(lookup).not.toHaveBeenCalled();
@@ -1232,8 +1367,8 @@ test('takes conjugations and pattern claims only from the first form before the 
   const conjugations = vi.spyOn(cardGenerator, 'conjugationCards');
 
   expect((await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results).toEqual([
-    { word: 'hablar / ir', status: 'added', vocabCards: 1, conjugationCards: 2 },
-    { word: 'bailar', status: 'added', vocabCards: 1, conjugationCards: 0 },
+    { word: 'hablar / ir', source: '/flashcards/test/packs/42', status: 'added', vocabCards: 1, conjugationCards: 2 },
+    { word: 'bailar', source: '/flashcards/test/packs/42', status: 'added', vocabCards: 1, conjugationCards: 0 },
   ]);
   expect(conjugations.mock.calls).toEqual([
     [regularVerb, new Set()], [secondRegularVerb, new Set(['ar-regular-present', 'ar-regular-preterite'])],
@@ -1260,8 +1395,8 @@ test.each([
   const generate = vi.spyOn(cardGenerator, 'generateCards');
 
   expect((await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results).toEqual([
-    { word: 'casa / hogar', status: 'error', vocabCards: 0, conjugationCards: 0, message },
-    { word: 'árbol', status: 'added', vocabCards: 1, conjugationCards: 0 },
+    { word: 'casa / hogar', source: '/flashcards/test/packs/42', status: 'error', vocabCards: 0, conjugationCards: 0, message },
+    { word: 'árbol', source: '/flashcards/test/packs/42', status: 'added', vocabCards: 1, conjugationCards: 0 },
   ]);
   expect(lookup.mock.calls).toEqual([['casa'], ['hogar'], ['árbol']]);
   expect(generate).toHaveBeenCalledOnce();
@@ -1278,10 +1413,10 @@ test.each([new Error('Lookup response timed out'), 'Lookup response timed out'])
 
     expect((await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results).toEqual([
       {
-        word: 'casa / hogar', status: 'error', vocabCards: 0, conjugationCards: 0,
+        word: 'casa / hogar', source: '/flashcards/test/packs/42', status: 'error', vocabCards: 0, conjugationCards: 0,
         message: 'Lookup response timed out',
       },
-      { word: 'árbol', status: 'added', vocabCards: 1, conjugationCards: 0 },
+      { word: 'árbol', source: '/flashcards/test/packs/42', status: 'added', vocabCards: 1, conjugationCards: 0 },
     ]);
     expect((await db.select().from(words).orderBy(words.id)).map(({ query }) => query)).toEqual(['casa', 'árbol']);
     expect(await db.select().from(cards)).toEqual([expect.objectContaining({ wordId: 2, front: 'tree' })]);
@@ -1347,7 +1482,9 @@ test('dedupes incoming words before lookup even when the first occurrence fails'
       word: 'ÁRBOL', status: 'error', vocabCards: 0, conjugationCards: 0,
       message: 'Lookup timed out after 1000 ms',
     },
+    { word: ' árbol\t', status: 'duplicate', vocabCards: 0, conjugationCards: 0 },
     { word: 'Casa', status: 'added', vocabCards: 2, conjugationCards: 0 },
+    { word: 'CASA', status: 'duplicate', vocabCards: 0, conjugationCards: 0 },
   ]);
   expect(lookup.mock.calls).toEqual([['ÁRBOL'], ['Casa']]);
   expect(await db.select().from(words)).toEqual([expect.objectContaining({ query: 'casa' })]);
@@ -1774,6 +1911,7 @@ test.each(['collision', 'fold', 'skipped'])('voice wiring reuses cached audio wh
   expect(fetchImpl.mock.calls.filter(([, init]) => init?.method === 'POST')).toEqual([]);
   expect(report).toEqual({ audio: { unspeakable: 0, message: null }, capReached: false, results: [
     { word: path === 'fold' ? '¡Adiós! / ¡Chao!' : path === 'collision' ? '¡Chao!' : '¡ADIÓS!',
+      ...(path === 'fold' ? { source: '/flashcards/test/packs/42' } : {}),
       status: path === 'fold' ? 'updated' : path === 'collision' ? 'exists' : 'skipped', vocabCards: 0, conjugationCards: 0 },
   ] });
   expect(await db.select({ audioFile: cards.audioFile, audioMp3: cards.audioMp3, ankiNoteId: cards.ankiNoteId })
@@ -1809,7 +1947,7 @@ test.each([
     audioMp3: Buffer.from([73, 68, 51, 0, 255]), audioSentAt: null, ankiNoteId, sentAt, declinedAt: null, createdAt: 123,
   }]);
   expect(report).toEqual({ audio: { unspeakable: 0, message: null }, capReached: false, results: [
-    { word: '¡Adiós! / ¡Chao!', status: 'updated', vocabCards: 0, conjugationCards: 0 },
+    { word: '¡Adiós! / ¡Chao!', source: '/flashcards/test/packs/42', status: 'updated', vocabCards: 0, conjugationCards: 0 },
   ] });
 });
 
@@ -1845,9 +1983,9 @@ test.each([
   const report = await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
 
   expect(report).toEqual({ audio: { unspeakable: 0, message: null }, capReached: false, results: [
-    { word: 'sí', status: 'added', vocabCards: 1, conjugationCards: 0 },
-    { word: '¡Adiós! / ¡Chao!', status: 'error', vocabCards: 0, conjugationCards: 0, message },
-    { word: 'casa', status: 'added', vocabCards: 1, conjugationCards: 0 },
+    { word: 'sí', source: '/flashcards/test/packs/42', status: 'added', vocabCards: 1, conjugationCards: 0 },
+    { word: '¡Adiós! / ¡Chao!', source: '/flashcards/test/packs/42', status: 'error', vocabCards: 0, conjugationCards: 0, message },
+    { word: 'casa', source: '/flashcards/test/packs/42', status: 'added', vocabCards: 1, conjugationCards: 0 },
   ] });
   expect(await db.select().from(cards).where(eq(cards.id, 41))).toEqual([{
     id: 41, wordId: 1, deck: 'Spanish::Vocab', kind: 'basic', front: 'goodbye', back: '¡Adiós!',
@@ -1910,7 +2048,7 @@ test('voice wiring voices the retained alternatives and original identity of an 
       audioMp3: Buffer.from([73, 68, 51]),
     }]);
   expect(report).toEqual({ audio: { unspeakable: 0, message: null }, capReached: false, results: [
-    { word: '¡Chao! / Hasta luego', status: 'updated', vocabCards: 0, conjugationCards: 0 },
+    { word: '¡Chao! / Hasta luego', source: '/flashcards/test/packs/42', status: 'updated', vocabCards: 0, conjugationCards: 0 },
   ] });
 });
 

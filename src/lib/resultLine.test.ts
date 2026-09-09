@@ -41,6 +41,12 @@ test('names a skipped word and why it was skipped', () => {
   })).toBe('skipped: already stored');
 });
 
+test('distinguishes a duplicate in this run from an already stored item', () => {
+  expect(formatResultLine({
+    word: 'casa', status: 'duplicate', vocabCards: 0, conjugationCards: 0,
+  })).toBe('skipped: duplicate in this run');
+});
+
 test('formats an error using its message', () => {
   expect(formatResultLine({
     word: 'casa', status: 'error', vocabCards: 0, conjugationCards: 0,

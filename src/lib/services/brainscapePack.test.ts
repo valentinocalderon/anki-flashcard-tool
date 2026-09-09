@@ -41,6 +41,30 @@ const setLinks = [
   '/flashcards/61-be-going-to-level-2-basic-15113084/packs/21882519',
   '/flashcards/63-window-words-2-level-2-basic-15113086/packs/21882519',
 ];
+const titles = [
+  '0.1.1 Common Greetings', '0.1.2 Nouns & Articles', '0.1.3 Adjectives',
+  '0.2.1 Basic Conversation', '0.2.2 Pronouns & Origins', '0.2.3 Family & Friends',
+  '0.3.1 Numbers & Money', '0.3.2 Days', '0.3.3 Time', '0.3.4 Food & Drinks',
+  '0.3.5 Getting around', '0.4.1 Pronunciation Gotchas',
+];
+const setTitles = [
+  '38.- Vocabulary Level 2 - Part 1 - Level 2 (basic)',
+  '39.- Verbs Level 2 - Part 1 - Level 2 (basic)',
+  '40.- The numbers - Level 2 (basic)',
+  '42.- The time - Level 2 (basic)',
+  '44.- Possessives 1 - Level 2 (basic)',
+  '46.- Expressing possession with "DE" - Level 2 (basic)',
+  '48.- To have, to have to - Level 2 (basic)',
+  "50.- Can, can't - Level 2 (basic)",
+  '52.- Vocabulary Level 2 - Part 2 - Level 2 (basic)',
+  '53.- Verbs Level 2 - Part 2 - Level 2 (basic)',
+  '54.- Demonstratives - Level 2 (basic)',
+  '56.- To want, to prefer, to need - Level 2 (basic)',
+  '58.- I like, I love, I’m interested in - Level 2 (basic)',
+  '60.- Vocabulary level 2 (basic) - Part 3 -Level 2 ( basic)',
+  '61.- Be going to - Level 2 (basic)',
+  '63.- Window words 2 - Level 2 (basic)',
+];
 
 const greetingSides = [
   '¡Hola!',
@@ -105,11 +129,64 @@ afterEach(() => {
 });
 
 const eventSources = [
-  { name: 'fetchPackEvents', stream: fetchPackEvents, url: packUrl, html: pack, expectedLinks: links },
-  { name: 'fetchPackSetEvents', stream: fetchPackSetEvents, url: packSetUrl, html: packSet, expectedLinks: setLinks },
+  { name: 'fetchPackEvents', stream: fetchPackEvents, url: packUrl, html: pack, expectedLinks: links, expectedTitles: titles },
+  { name: 'fetchPackSetEvents', stream: fetchPackSetEvents, url: packSetUrl, html: packSet, expectedLinks: setLinks, expectedTitles: setTitles },
 ];
 
-test.each(eventSources)('$name yields the saved links first and each deck as its body lands in page order', async ({ stream, url, html, expectedLinks }) => {
+test('pairs every saved pack-set href with its printed title', () => {
+  expect(packSetLinks(packSet)).toEqual(setLinks.map((href, index) => ({ href, title: setTitles[index] })));
+});
+
+test('reads title text only inside its anchor, decodes once, and collapses whitespace like Spanish sides', () => {
+  const html = `<div class='deck-item-title'>Outside</div>
+    <a href='/flashcards/missing/packs/42'><span class='deck-item-title'>Wrong tag</span>
+      <div class='deck-item-title-extra'>Wrong class</div></a>
+    <a href='/flashcards/titled/packs/42'><div class='deck-item-copy'>
+      <div class='extra deck-item-title more'> \n &iexcl;Ho<strong>la</strong>!&nbsp;&#161;S&#xED;!
+        <div>&quot;uno&quot;<br>&apos;dos&#39;</div>&lt;texto&gt; &amp;lt; </div>
+      <div class='deck-item-description'>Description</div></div></a>
+    <a href='/flashcards/titled/packs/42'><div class='deck-item-title'>Later title</div></a>`;
+
+  expect(deckLinks(html, '42')).toEqual([
+    { href: '/flashcards/missing/packs/42', title: null },
+    { href: '/flashcards/titled/packs/42', title: '¡Hola! ¡Sí! "uno" \'dos\' <texto> &lt;' },
+  ]);
+});
+
+test.each(eventSources)('$name yields href discovery and the title from the saved discovery page', async ({ stream, url, html, expectedLinks, expectedTitles }) => {
+  const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(html))
+    .mockResolvedValueOnce(new Response(greetings));
+  const events = stream(url, fetchImpl);
+
+  expect(await events.next()).toEqual({ done: false, value: { links: expectedLinks } });
+  const next = events.next();
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(await next).toEqual({ done: false, value: {
+    link: expectedLinks[0],
+    title: expectedTitles[0],
+    sides: greetingSides,
+  } });
+  await events.return();
+  expect(fetchImpl).toHaveBeenCalledTimes(2);
+});
+
+test.each(eventSources)('$name reports an unknown title entity before yielding discovery', async ({ stream, url }) => {
+  const html = `<link rel='canonical' href='/packs/42'>
+    <a href='/flashcards/test/packs/42'><div class='deck-item-title'>20&deg;C</div></a>`;
+  const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(html));
+  const events = stream(url === packUrl ? 'https://www.brainscape.com/packs/42' : url, fetchImpl);
+
+  await expect(events.next()).rejects.toThrow(new Error('Unknown HTML entity "&deg;"; add deg to namedEntities.'));
+  expect(await events.next()).toEqual({ done: true, value: undefined });
+  expect(fetchImpl).toHaveBeenCalledOnce();
+});
+
+test('reports an unclosed title div inside its anchor', () => {
+  expect(() => deckLinks("<a href='/flashcards/test/packs/42'><div class='deck-item-title'>Broken</a>", '42'))
+    .toThrow('Unclosed div');
+});
+
+test.each(eventSources)('$name yields the saved links first and each deck as its body lands in page order', async ({ stream, url, html, expectedLinks, expectedTitles }) => {
   let finishPageBody: (html: string) => void = () => { throw new Error('Page body was not requested'); };
   let finishDeckBody: (html: string) => void = () => { throw new Error('Deck body was not requested'); };
   const pageResponse = new Response();
@@ -144,7 +221,7 @@ test.each(eventSources)('$name yields the saved links first and each deck as its
       expect(landed).toBe(false);
       finishDeckBody(greetings);
     }
-    expect(await next).toEqual({ done: false, value: { link, sides: index === 0 ? greetingSides : nounSides } });
+    expect(await next).toEqual({ done: false, value: { link, title: expectedTitles[index], sides: index === 0 ? greetingSides : nounSides } });
     expect(fetchImpl).toHaveBeenLastCalledWith(`https://www.brainscape.com${link}`, expect.any(Object));
   }
   expect(await events.next()).toEqual({ done: true, value: undefined });
@@ -168,7 +245,7 @@ test('fetchPackEvents reuses the initial deck body and yields its sides before a
 
   const events = fetchPackEvents(url, fetchImpl);
   expect(await events.next()).toEqual({ done: false, value: { links } });
-  expect(await events.next()).toEqual({ done: false, value: { link: links[0], sides: greetingSides } });
+  expect(await events.next()).toEqual({ done: false, value: { link: links[0], title: null, sides: greetingSides } });
   expect(fetchImpl).toHaveBeenCalledOnce();
   expect(readBody).toHaveBeenCalledOnce();
   expect(vi.getTimerCount()).toBe(0);
@@ -177,7 +254,7 @@ test('fetchPackEvents reuses the initial deck body and yields its sides before a
     await vi.advanceTimersByTimeAsync(999);
     expect(fetchImpl).toHaveBeenCalledTimes(index + 1);
     await vi.advanceTimersByTimeAsync(1);
-    expect(await next).toEqual({ done: false, value: { link, sides: nounSides } });
+    expect(await next).toEqual({ done: false, value: { link, title: null, sides: nounSides } });
     expect(fetchImpl).toHaveBeenCalledTimes(index + 2);
     expect(fetchImpl).toHaveBeenLastCalledWith(`https://www.brainscape.com${link}`, expect.any(Object));
   }
@@ -225,7 +302,7 @@ test('fetchPackEvents preserves the missing pack id error before fetching', asyn
   expect(fetchImpl).not.toHaveBeenCalled();
 });
 
-test.each(eventSources)('$name keeps the landed deck event and throws the observed error from the next deck', async ({ stream, url, html, expectedLinks }) => {
+test.each(eventSources)('$name keeps the landed deck event and throws the observed error from the next deck', async ({ stream, url, html, expectedLinks, expectedTitles }) => {
   const deckUrl = `https://www.brainscape.com${expectedLinks[1]}`;
   const requestError = new Error('connect ETIMEDOUT');
   const bodyError = new Error('Response body stream terminated');
@@ -249,7 +326,7 @@ test.each(eventSources)('$name keeps the landed deck event and throws the observ
     const firstDeck = events.next();
     await vi.advanceTimersByTimeAsync(1000);
     const landed = await firstDeck;
-    expect(landed).toEqual({ done: false, value: { link: expectedLinks[0], sides: greetingSides } });
+    expect(landed).toEqual({ done: false, value: { link: expectedLinks[0], title: expectedTitles[0], sides: greetingSides } });
 
     const next = events.next();
     const assertion = expect(next).rejects.toThrow(error);
@@ -257,13 +334,13 @@ test.each(eventSources)('$name keeps the landed deck event and throws the observ
     await assertion;
     if (error === requestError || error === bodyError) await expect(next).rejects.toBe(error);
     expect(await events.next()).toEqual({ done: true, value: undefined });
-    expect(landed).toEqual({ done: false, value: { link: expectedLinks[0], sides: greetingSides } });
+    expect(landed).toEqual({ done: false, value: { link: expectedLinks[0], title: expectedTitles[0], sides: greetingSides } });
     expect(fetchImpl).toHaveBeenCalledTimes(3);
     expect(vi.getTimerCount()).toBe(0);
   }
 });
 
-test.each(eventSources)('$name preserves the fifteen second request and body timeouts at discovery and after a landed deck', async ({ stream, url, html, expectedLinks }) => {
+test.each(eventSources)('$name preserves the fifteen second request and body timeouts at discovery and after a landed deck', async ({ stream, url, html, expectedLinks, expectedTitles }) => {
   const timeoutReason = new DOMException('The operation timed out', 'TimeoutError');
   const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((delay) => {
     const controller = new AbortController();
@@ -294,7 +371,7 @@ test.each(eventSources)('$name preserves the fifteen second request and body tim
         expect(await events.next()).toEqual({ done: false, value: { links: expectedLinks } });
         const firstDeck = events.next();
         await vi.advanceTimersByTimeAsync(1000);
-        expect(await firstDeck).toEqual({ done: false, value: { link: expectedLinks[0], sides: greetingSides } });
+        expect(await firstDeck).toEqual({ done: false, value: { link: expectedLinks[0], title: expectedTitles[0], sides: greetingSides } });
       }
       const next = events.next();
       let settled = false;
@@ -404,9 +481,9 @@ test.each([
   { name: 'pack', html: pack },
   { name: 'greetings deck', html: greetings },
   { name: 'nouns deck', html: nouns },
-])('extracts the twelve deck hrefs in page order from the $name fixture', ({ html }) => {
+])('extracts the twelve deck hrefs and their titles in page order from the $name fixture', ({ html }) => {
   expect(deckLinks(html, packId)).toHaveLength(12);
-  expect(deckLinks(html, packId)).toEqual(links);
+  expect(deckLinks(html, packId)).toEqual(links.map((href, index) => ({ href, title: html === pack ? titles[index] : null })));
 });
 
 test('dedupes hrefs, matches the whole pack id, and ignores non-href text', () => {
@@ -418,31 +495,13 @@ test('dedupes hrefs, matches the whole pack id, and ignores non-href text', () =
     <a data-href='/flashcards/data/packs/42'>data</a>
     <div>/flashcards/text/packs/42</div>`;
 
-  expect(deckLinks(html, '42')).toEqual(['/flashcards/z/packs/42', '/flashcards/a/packs/42']);
+  expect(deckLinks(html, '42')).toEqual([
+    { href: '/flashcards/z/packs/42', title: null },
+    { href: '/flashcards/a/packs/42', title: null },
+  ]);
   expect(deckLinks(html, '4.')).toEqual([]);
   expect(deckLinks('', packId)).toEqual([]);
   expect(deckLinks(pack, '999')).toEqual([]);
-});
-
-test('extracts exactly sixteen pack-set links in page order from the saved fixture', () => {
-  expect(packSetLinks(packSet)).toEqual([
-    '/flashcards/38-vocabulary-level-2-part-1-level-2-bas-15113057/packs/21882519',
-    '/flashcards/39-verbs-level-2-part-1-level-2-basic-15113060/packs/21882519',
-    '/flashcards/40-the-numbers-level-2-basic-15113061/packs/21882519',
-    '/flashcards/42-the-time-level-2-basic-15113064/packs/21882519',
-    '/flashcards/44-possessives-1-level-2-basic-15113066/packs/21882519',
-    '/flashcards/46-expressing-possession-with-de-level-2-15113068/packs/21882519',
-    '/flashcards/48-to-have-to-have-to-level-2-basic-15113070/packs/21882519',
-    '/flashcards/50-can-can-t-level-2-basic-15113073/packs/21882519',
-    '/flashcards/52-vocabulary-level-2-part-2-level-2-bas-15113074/packs/21882519',
-    '/flashcards/53-verbs-level-2-part-2-level-2-basic-15113078/packs/21882519',
-    '/flashcards/54-demonstratives-level-2-basic-15113079/packs/21882519',
-    '/flashcards/56-to-want-to-prefer-to-need-level-2-bas-15113081/packs/21882519',
-    '/flashcards/58-i-like-i-love-i-m-interested-in-level-15113082/packs/21882519',
-    '/flashcards/60-vocabulary-level-2-basic-part-3-level-15113083/packs/21882519',
-    '/flashcards/61-be-going-to-level-2-basic-15113084/packs/21882519',
-    '/flashcards/63-window-words-2-level-2-basic-15113086/packs/21882519',
-  ]);
 });
 
 test.each(['https://www.brainscape.com/packs/42', '/packs/level-2-42'])(
@@ -457,7 +516,10 @@ test.each(['https://www.brainscape.com/packs/42', '/packs/level-2-42'])(
       <a data-href='/flashcards/data/packs/42'>data</a>
       <div>/flashcards/text/packs/42</div>`;
 
-    expect(packSetLinks(html)).toEqual(['/flashcards/z/packs/42', '/flashcards/a/packs/42']);
+    expect(packSetLinks(html)).toEqual([
+      { href: '/flashcards/z/packs/42', title: null },
+      { href: '/flashcards/a/packs/42', title: null },
+    ]);
   },
 );
 
