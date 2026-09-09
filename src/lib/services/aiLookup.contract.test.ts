@@ -6,7 +6,7 @@ import { loadConfig } from '@/lib/config';
 import { formatResultLine } from '@/lib/resultLine';
 import { WordInfoSchema, type WordInfo } from '@/lib/types';
 import { applyMigrations, createDb, type Db } from '@/server/db';
-import { cards, words } from '@/server/db/schema';
+import { cards, conjugationPatterns, words } from '@/server/db/schema';
 import { openaiLookup } from './aiLookup';
 import { conjugationCards, generateCards } from './cardGenerator';
 import { generateForWords } from './listGenerationService';
@@ -92,6 +92,107 @@ test('a supported-shaped reply with a string error parses through the error bran
   expect(WordInfoSchema.parse(payload)).toEqual(payload);
 });
 
+test.each([null, 'ser'])('an error reply with an unusable ending of %s drops the class and preserves the error', async (ending) => {
+  respondWith({
+    ...unsupported, conjugationClass: { ending, present: 'regular', preterite: 'regular' },
+  });
+
+  await expect(openaiLookup('bonjour')).resolves.toStrictEqual(unsupported);
+  expect(createCompletion).toHaveBeenCalledOnce();
+});
+
+test.each([null, 'ser'])('the 2026-09-09 ending failure %s drops only the class before parsing', async (ending) => {
+  const payload = {
+    ...supported, english: 'to be', spanish: 'ser', gender: null, article: null, type: 'verb',
+    conjugations: { present: { yo: 'soy' }, preterite: { yo: 'fui' } },
+    conjugationClass: { ending, present: 'irregular', preterite: 'irregular' },
+  };
+  const expected = { ...payload, conjugationClass: null };
+
+  expect(WordInfoSchema.parse(payload)).toStrictEqual(expected);
+  expect(payload.conjugationClass).toStrictEqual({ ending, present: 'irregular', preterite: 'irregular' });
+  respondWith(payload);
+
+  await expect(openaiLookup('ser')).resolves.toStrictEqual(expected);
+  expect(createCompletion).toHaveBeenCalledOnce();
+});
+
+test.each(['ar', 'er', 'ir'])('an ending of %s keeps the conjugation class intact', (ending) => {
+  const payload = {
+    ...supported, conjugationClass: { ending, present: 'e-ie', preterite: 'irregular' },
+  };
+
+  expect(WordInfoSchema.parse(payload)).toStrictEqual(payload);
+});
+
+test('a conjugation class with no ending key drops to null', async () => {
+  const payload = {
+    ...supported, conjugationClass: { present: 'regular', preterite: 'regular' },
+  };
+  respondWith(payload);
+
+  await expect(openaiLookup('casa')).resolves.toStrictEqual({ ...supported, conjugationClass: null });
+  expect(payload.conjugationClass).toStrictEqual({ present: 'regular', preterite: 'regular' });
+  expect(createCompletion).toHaveBeenCalledOnce();
+});
+
+test('a null conjugation class stays null', () => {
+  expect(WordInfoSchema.parse(supported)).toStrictEqual(supported);
+});
+
+test('an absent conjugation class stays absent', () => {
+  const payload: Record<string, unknown> = { ...supported };
+  delete payload.conjugationClass;
+
+  expect(WordInfoSchema.parse(payload)).toStrictEqual(payload);
+  expect(WordInfoSchema.parse(payload)).not.toHaveProperty('conjugationClass');
+});
+
+test.each(['present', 'preterite'])('a valid ending still rejects an unknown %s pattern', async (tense) => {
+  const payload = {
+    ...supported,
+    conjugationClass: { ending: 'ar', present: 'regular', preterite: 'regular', [tense]: 'unknown' },
+  };
+  expect(() => WordInfoSchema.parse(payload)).toThrow(ZodError);
+  respondWith(payload);
+
+  const answer = openaiLookup('casa');
+
+  await expect(answer).rejects.toHaveProperty('message',
+    `AI response did not match the expected shape: [{"received":"unknown","code":"invalid_enum_value","options":["regular","e-ie","o-ue","e-i","u-ue","irregular"],"path":["conjugationClass","${tense}"],"message":"Invalid enum value. Expected 'regular' | 'e-ie' | 'o-ue' | 'e-i' | 'u-ue' | 'irregular', received 'unknown'"}]`,
+  );
+  await expect(answer).rejects.toHaveProperty('cause', expect.any(ZodError));
+  expect(console.error).toHaveBeenCalledOnce();
+});
+
+test.each(['present', 'preterite'])('a valid ending still requires the %s pattern key', (tense) => {
+  const conjugationClass: Record<string, unknown> = {
+    ending: 'ar', present: 'regular', preterite: 'regular',
+  };
+  delete conjugationClass[tense];
+
+  expect(() => WordInfoSchema.parse({ ...supported, conjugationClass })).toThrow(ZodError);
+});
+
+test.each([null, [], 'casa', 42])('a non-object reply still fails parsing: %j', (payload) => {
+  expect(() => WordInfoSchema.parse(payload)).toThrow(ZodError);
+});
+
+test.each(['ar', 42, true, []])('a non-object conjugation class still fails parsing: %j', (conjugationClass) => {
+  expect(() => WordInfoSchema.parse({ ...supported, conjugationClass })).toThrow(ZodError);
+});
+
+test.each([null, 'ser'])('dropping an ending of %s cannot hide numeric english or a missing required key', (ending) => {
+  const payload = {
+    ...supported, conjugationClass: { ending, present: 'regular', preterite: 'regular' },
+  };
+  const missingGender: Record<string, unknown> = { ...payload };
+  delete missingGender.gender;
+
+  expect(() => WordInfoSchema.parse({ ...payload, english: 42 })).toThrow(ZodError);
+  expect(() => WordInfoSchema.parse(missingGender)).toThrow(ZodError);
+});
+
 test('a supported reply missing gender reports only the supported branch', async () => {
   const payload: Record<string, unknown> = { ...supported };
   delete payload.gender;
@@ -149,6 +250,28 @@ test('generation stores cards from a supported OpenAI response with null error',
     { front: 'house', back: 'la casa' },
   ]);
   expect(await cachedLookup(db, 'casa', openaiLookup)).toEqual(supported);
+  expect(createCompletion).toHaveBeenCalledOnce();
+});
+
+test.each([null, 'ser'])('generation drops an unusable ending of %s and reports plain vocab success', async (ending) => {
+  const payload = {
+    ...supported, english: 'to be', spanish: 'ser', gender: null, article: null, type: 'verb',
+    conjugations: { present: { yo: 'soy' }, preterite: { yo: 'fui' } },
+    conjugationClass: { ending, present: 'regular', preterite: 'irregular' },
+  };
+  respondWith(payload);
+
+  const result = await generateForWords(db, 'ser', openaiLookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  expect(result.results).toEqual([{ word: 'ser', status: 'added', vocabCards: 1, conjugationCards: 0 }]);
+  expect(result.results.map(formatResultLine)).toEqual(['1 vocab card']);
+  expect(await db.select({ deck: cards.deck, kind: cards.kind, front: cards.front, back: cards.back }).from(cards)).toEqual([
+    { deck: 'Spanish::Vocab', kind: 'basic', front: 'to be', back: 'ser' },
+  ]);
+  expect(await db.select().from(conjugationPatterns)).toEqual([]);
+  expect(await db.select({ query: words.query, info: words.info }).from(words)).toEqual([
+    { query: 'ser', info: JSON.stringify({ ...payload, conjugationClass: null }) },
+  ]);
   expect(createCompletion).toHaveBeenCalledOnce();
 });
 

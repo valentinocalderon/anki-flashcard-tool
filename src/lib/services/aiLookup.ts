@@ -11,7 +11,7 @@ function shapeMismatchError(error: ZodError, issues = error.issues): Error {
   });
 }
 
-export async function askForJson<T>(prompt: string, schema: z.ZodType<T>, client: OpenAI): Promise<T> {
+export async function askForJson<T>(prompt: string, schema: z.ZodType<T, z.ZodTypeDef, unknown>, client: OpenAI): Promise<T> {
   const config = loadConfig();
 
   if (!config.aiOptions?.enabled) {

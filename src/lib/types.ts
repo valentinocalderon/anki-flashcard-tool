@@ -45,15 +45,34 @@ const supportedWordInfoSchema = z.object({
   error: z.null().optional(),
 });
 
-export const WordInfoSchema = z.union([
-  supportedWordInfoSchema,
-  supportedWordInfoSchema.extend({
-    english: z.string().nullable().optional(),
-    spanish: z.string().nullable().optional(),
-    type: z.string().nullable().optional(),
-    error: z.string(),
-  }).partial({ gender: true, article: true, example: true }),
-]);
+function dropUnusableConjugationClass(reply: unknown): unknown {
+  if (typeof reply !== 'object' || reply === null || Array.isArray(reply) || !('conjugationClass' in reply)) {
+    return reply;
+  }
+
+  const classification = reply.conjugationClass;
+  if (typeof classification !== 'object' || classification === null || Array.isArray(classification)) {
+    return reply;
+  }
+  if ('ending' in classification && conjugationClassSchema.shape.ending.safeParse(classification.ending).success) {
+    return reply;
+  }
+
+  return { ...reply, conjugationClass: null };
+}
+
+export const WordInfoSchema = z.preprocess(
+  dropUnusableConjugationClass,
+  z.union([
+    supportedWordInfoSchema,
+    supportedWordInfoSchema.extend({
+      english: z.string().nullable().optional(),
+      spanish: z.string().nullable().optional(),
+      type: z.string().nullable().optional(),
+      error: z.string(),
+    }).partial({ gender: true, article: true, example: true }),
+  ]),
+);
 
 export function wordInfoIssues(error: z.ZodError): z.ZodIssue[] {
   const [issue] = error.issues;

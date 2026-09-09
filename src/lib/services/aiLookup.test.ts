@@ -53,6 +53,15 @@ test('returns the parsed and schema-validated answer', async () => {
   expect(answer).toEqual({ items: ['casa', 'hablar'] });
 });
 
+test('infers the parsed output of a schema with unknown input', async () => {
+  const { client } = fakeClient('{"items":["casa","hablar"],"extra":true}');
+  const preprocessedSchema = z.preprocess((input) => input, schema);
+
+  const answer: z.infer<typeof schema> = await askForJson(prompt, preprocessedSchema, client);
+
+  expect(answer).toEqual({ items: ['casa', 'hablar'] });
+});
+
 test('reports a schema mismatch with the shape message and zod issues', async () => {
   const raw = '{"items":42}';
   const { client } = fakeClient(raw);

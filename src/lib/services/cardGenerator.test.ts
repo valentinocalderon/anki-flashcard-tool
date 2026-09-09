@@ -545,8 +545,15 @@ test('the word schema keeps only present and preterite conjugations', () => {
   }).conjugations).toEqual(regularVerb.conjugations);
 });
 
+test('the word schema parses with a dropped class for an unusable ending', () => {
+  const payload = {
+    ...regularVerb, conjugationClass: { ending: 're', present: 'regular', preterite: 'regular' },
+  };
+
+  expect(WordInfoSchema.parse(payload)).toEqual({ ...regularVerb, conjugationClass: null });
+});
+
 test.each([
-  { ending: 're', present: 'regular', preterite: 'regular' },
   { ending: 'ar', present: 'unknown', preterite: 'regular' },
   { ending: 'ar', present: 'regular', preterite: 'unknown' },
   { ending: 'ar', present: 'regular' },
@@ -600,21 +607,6 @@ test('lookup reports shape failures with only the supported branch zod issues', 
     {
       code: 'invalid_type', expected: 'string', received: 'number', path: ['spanish'],
       message: 'Expected string, received number',
-    },
-    {
-      received: 're', code: 'invalid_enum_value', options: ['ar', 'er', 'ir'],
-      path: ['conjugationClass', 'ending'],
-      message: "Invalid enum value. Expected 'ar' | 'er' | 'ir', received 're'",
-    },
-    {
-      expected: "'regular' | 'e-ie' | 'o-ue' | 'e-i' | 'u-ue' | 'irregular'",
-      received: 'undefined', code: 'invalid_type',
-      path: ['conjugationClass', 'present'], message: 'Required',
-    },
-    {
-      expected: "'regular' | 'e-ie' | 'o-ue' | 'e-i' | 'u-ue' | 'irregular'",
-      received: 'undefined', code: 'invalid_type',
-      path: ['conjugationClass', 'preterite'], message: 'Required',
     },
   ];
   createCompletion.mockResolvedValueOnce({
