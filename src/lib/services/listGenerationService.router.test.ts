@@ -5,7 +5,7 @@ import type { WordInfo } from '@/lib/types';
 import { ankiRouter } from '@/server/api/routers/lookupRouter';
 import * as database from '@/server/db';
 import { cards, words } from '@/server/db/schema';
-import { openaiLookup } from './aiLookup';
+import { askForJson, openaiLookup } from './aiLookup';
 import * as ankiSender from './ankiSender';
 import * as audioBackfill from './audioBackfill';
 import * as brainscapePack from './brainscapePack';
@@ -114,6 +114,37 @@ test('the router streams every service event in order and yields the send and ba
   expect(await events.next()).toEqual({ done: true, value: undefined });
   expect(order).toEqual(['generation', 'send', 'backfill']);
   expect(fetchImpl).not.toHaveBeenCalled();
+});
+
+test.each([
+  { text: 'https://www.brainscape.com/flashcards/yes/packs/42\ncasa', badLine: 'casa' },
+  { text: 'hola\nhttps://www.brainscape.com/p/house-set\nadiós', badLine: 'hola' },
+  { text: '\r\nhttps://www.brainscape.com/packs/42\r\n\r\n  buenos días\t\r\n', badLine: '  buenos días\t' },
+  { text: 'hola https://www.brainscape.com/p/house-set', badLine: 'hola https://www.brainscape.com/p/house-set' },
+])('the router refuses a mixed paste naming "$badLine" before any external call', async ({ text, badLine }) => {
+  vi.mocked(askForJson).mockClear();
+  vi.mocked(openaiLookup).mockResolvedValue(wordInfo);
+  const synthesize = vi.fn<ReturnType<typeof spanishVoice.createSpanishVoice>['synthesize']>()
+    .mockRejectedValue(new Error('Unexpected voice request'));
+  vi.spyOn(spanishVoice, 'createSpanishVoice').mockReturnValue({
+    synthesize, dispatchedCharacters: 0, capReached: false,
+  });
+  const send = vi.spyOn(ankiSender, 'sendPending');
+  const backfill = vi.spyOn(audioBackfill, 'backfillSentAudio');
+  const caller = ankiRouter.createCaller({ headers: new Headers() });
+  const events = await caller.generateFromList({ text });
+
+  await expect(events.next()).rejects.toThrow(new Error(
+    `A paste holding a Brainscape URL must hold nothing else; remove the line "${badLine}" or paste words separately.`,
+  ));
+  expect(askForJson).not.toHaveBeenCalled();
+  expect(openaiLookup).not.toHaveBeenCalled();
+  expect(synthesize).not.toHaveBeenCalled();
+  expect(fetchImpl).not.toHaveBeenCalled();
+  expect(send).not.toHaveBeenCalled();
+  expect(backfill).not.toHaveBeenCalled();
+  expect(await db.select().from(words)).toEqual([]);
+  expect(await db.select().from(cards)).toEqual([]);
 });
 
 test('the router reports a lone pasted URL failure as one error line without throwing', async () => {

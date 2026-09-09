@@ -119,7 +119,7 @@ export default function HomePage() {
         }}
         className="flex flex-col gap-3 mb-6"
       >
-        <label htmlFor="words" className="font-semibold">Words: lines, commas or a sentence; Brainscape deck and deck set URLs may be pasted together, one per line; a deck URL runs its deck, a deck set URL runs every deck in it</label>
+        <label htmlFor="words" className="font-semibold">Paste either words (lines, commas or a sentence) or Brainscape deck and deck set URLs, one per line with nothing else in the box; a deck URL runs its deck, a deck set URL runs every deck in it</label>
         <textarea
           id="words"
           rows={8}

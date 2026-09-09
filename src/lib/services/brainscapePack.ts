@@ -155,6 +155,18 @@ export function brainscapeUrls(text: string): string[] | null {
   return urls.every((url) => isPackUrl(url) || isPackSetUrl(url)) ? urls : null;
 }
 
+export function mixedPasteLine(text: string): string | null {
+  let hasUrl = false;
+  let badLine: string | null = null;
+  for (const line of text.split(/\r\n?|\n/)) {
+    if (line.trim().length === 0) continue;
+    const matches = line.trim().split(/\s+/).map((token) => isPackUrl(token) || isPackSetUrl(token));
+    if (matches.some(Boolean)) hasUrl = true;
+    if (badLine === null && !matches.every(Boolean)) badLine = line;
+  }
+  return hasUrl ? badLine : null;
+}
+
 async function readPage(pageUrl: string, fetchImpl: typeof fetch): Promise<string> {
   const signal = AbortSignal.timeout(15000);
   try {

@@ -461,7 +461,7 @@ test('the page labels deck and deck set URLs and renders a bare Deck 1 heading',
   await page.generation.run;
 
   expect.soft(/<label[^>]*>(.*?)<\/label>/.exec(page.html())?.[1]).toBe(
-    'Words: lines, commas or a sentence; Brainscape deck and deck set URLs may be pasted together, one per line; a deck URL runs its deck, a deck set URL runs every deck in it',
+    'Paste either words (lines, commas or a sentence) or Brainscape deck and deck set URLs, one per line with nothing else in the box; a deck URL runs its deck, a deck set URL runs every deck in it',
   );
   expect.soft(resultGroups(page.html())).toEqual([{ heading: 'Deck 1', words: [], tally: undefined }]);
 });
@@ -795,6 +795,38 @@ test.each(['request', 'stream'] as const)('a rejected %s shows the observed erro
   expect(page.queries.pending.refetch).toHaveBeenCalledOnce();
   expect(page.queries.declined.refetch).toHaveBeenCalledOnce();
   expect(page.queries.awaitingAudio.refetch).toHaveBeenCalledOnce();
+});
+
+test('a refused mixed paste renders the bad line in the red alert', async () => {
+  const page = pageRun(0, 0, 0);
+  const form = page.children().find((child) => React.isValidElement(child) && child.type === 'form');
+  if (!React.isValidElement<{ children: React.ReactNode }>(form)) throw new Error('Expected the generation form.');
+  const textarea = React.Children.toArray(form.props.children)
+    .find((child) => React.isValidElement(child) && child.type === 'textarea');
+  if (!React.isValidElement<{ onChange: (event: { target: { value: string } }) => void }>(textarea)) {
+    throw new Error('Expected the words textarea.');
+  }
+  textarea.props.onChange({ target: { value: 'https://www.brainscape.com/packs/42\nbuenos días' } });
+  page.generate.mockResolvedValueOnce({
+    [Symbol.asyncIterator]: () => ({
+      next: async () => {
+        throw new Error('A paste holding a Brainscape URL must hold nothing else; remove the line "buenos días" or paste words separately.');
+      },
+    }),
+  });
+
+  page.submit();
+  await expect(page.generation.run).rejects.toThrow(
+    'A paste holding a Brainscape URL must hold nothing else; remove the line "buenos días" or paste words separately.',
+  );
+  expect(page.generate).toHaveBeenCalledExactlyOnceWith({ text: 'https://www.brainscape.com/packs/42\nbuenos días' });
+  expect(page.html()).toContain('<p role="alert" class="text-red-600">A paste holding a Brainscape URL must hold nothing else; remove the line &quot;buenos días&quot; or paste words separately.</p>');
+  expect(page.html()).not.toContain('No words found in the text.');
+  expect(page.html()).not.toContain('role="status"');
+  expect(page.html()).not.toContain('disabled=""');
+  expect(page.send).not.toHaveBeenCalled();
+  expect(page.retry).not.toHaveBeenCalled();
+  expect(page.backfill).not.toHaveBeenCalled();
 });
 
 test('the audio count and control use the footer pattern and disable every action while voicing', async () => {

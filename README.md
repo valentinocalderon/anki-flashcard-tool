@@ -17,7 +17,7 @@ Turn pasted words or text into Spanish vocabulary, example-sentence, and conjuga
 
 ## One-click flow
 
-Paste a Brainscape pack URL alone in the box to fetch every deck and make cards from each card's Spanish side, deduped against what is already stored. Anything else is a word list: lines, commas, semicolons, bullets, numbering, or a plain sentence. Click **Generate and send to Anki**. The app looks up each word, saves new cards, sends pending cards to Anki, and requests an AnkiWeb sync when it processes pending cards.
+The box takes either Brainscape URLs or a word list. Paste Brainscape URLs one per line, with nothing else in the box: a deck URL runs its deck, a deck set URL runs every deck in it, and cards come from each card's Spanish side, deduped across the whole run against what is already stored. A URL that fails gets its own error line and the rest still run. A paste that mixes a Brainscape URL with anything else is refused before the run starts, and names the bad line. Anything with no Brainscape URL in it is a word list: lines, commas, semicolons, bullets, numbering, or a plain sentence. Click **Generate and send to Anki**. The app looks up each word, saves new cards, sends pending cards to Anki, and requests an AnkiWeb sync when it processes pending cards.
 
 Each result line shows its outcome: ✓ added, ↻ updated, – already existed or skipped, and ! failed. An updated result means the saved card changed; check Anki if it was already sent. The send report shows delivery and sync status. When existing cards gained audio, sync Anki desktop with AnkiWeb first, then sync Anki on your phone. Otherwise, after a successful sync, sync Anki on your phone to study the cards.
 

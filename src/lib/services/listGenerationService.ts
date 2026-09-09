@@ -5,7 +5,7 @@ import type { WordInfo, WordResult } from '@/lib/types';
 import type { Db } from '@/server/db';
 import { cards, words } from '@/server/db/schema';
 import { askForJson } from './aiLookup';
-import { brainscapeUrls, fetchPastedEvents } from './brainscapePack';
+import { brainscapeUrls, fetchPastedEvents, mixedPasteLine } from './brainscapePack';
 import { spanishSideItems, type BrainscapeItem } from './brainscapeSides';
 import { cardAudio } from './cardAudio';
 import { conjugationCards, generateCards, type GeneratedCard, type LookedUpItem } from './cardGenerator';
@@ -48,6 +48,10 @@ async function* inputItems(
   fetchImpl: typeof fetch,
   results: WordResult[],
 ): AsyncGenerator<GenerationEvent, readonly InputItem[]> {
+  const badLine = mixedPasteLine(text);
+  if (badLine !== null) {
+    throw new Error(`A paste holding a Brainscape URL must hold nothing else; remove the line "${badLine}" or paste words separately.`);
+  }
   const urls = brainscapeUrls(text);
   if (urls === null) {
     return (await resolveWordList(text, ask)).map((spanish) => ({

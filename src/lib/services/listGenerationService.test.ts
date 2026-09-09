@@ -1569,10 +1569,29 @@ test.each(['http', 'request', 'body'])(
 );
 
 test.each([
-  { text: 'https://www.brainscape.com/packs/42\ncasa', expected: ['https://www.brainscape.com/packs/42', 'casa'] },
-  { text: 'https://www.brainscape.com/p/5M6OW-LH-D10NR\ncasa', expected: ['https://www.brainscape.com/p/5M6OW-LH-D10NR', 'casa'] },
+  { text: 'https://www.brainscape.com/packs/42\ncasa', badLine: 'casa' },
+  { text: 'https://www.brainscape.com/p/5M6OW-LH-D10NR\ncasa', badLine: 'casa' },
+  { text: 'casa, https://www.brainscape.com/p/5M6OW-LH-D10NR', badLine: 'casa, https://www.brainscape.com/p/5M6OW-LH-D10NR' },
+])('refuses a mixed paste before lookup, extraction, generation or fetch for $text', async ({ text, badLine }) => {
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>().mockResolvedValue(noun);
+  const parseList = vi.spyOn(wordListParser, 'resolveWordList');
+  const generate = vi.spyOn(cardGenerator, 'generateCards');
+
+  await expect(generateForWords(db, text, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl)))
+    .rejects.toThrow(new Error(
+      `A paste holding a Brainscape URL must hold nothing else; remove the line "${badLine}" or paste words separately.`,
+    ));
+
+  expect(lookup).not.toHaveBeenCalled();
+  expect(parseList).not.toHaveBeenCalled();
+  expect(generate).not.toHaveBeenCalled();
+  expect(fetchImpl).not.toHaveBeenCalled();
+  expect(await db.select().from(words)).toEqual([]);
+  expect(await db.select().from(cards)).toEqual([]);
+});
+
+test.each([
   { text: 'https://www.brainscape.com/p/5M6OW-LH-D10NR; casa', expected: ['https://www.brainscape.com/p/5M6OW-LH-D10NR', 'casa'] },
-  { text: 'casa, https://www.brainscape.com/p/5M6OW-LH-D10NR', expected: ['casa', 'https://www.brainscape.com/p/5M6OW-LH-D10NR'] },
   { text: 'https://notbrainscape.com/packs/42', expected: ['https://notbrainscape.com/packs/42'] },
   { text: 'Casa; ¡Adiós!/¡Chao!; CASA', expected: ['Casa', '¡Adiós!/¡Chao!'] },
 ])('preserves the ordinary word-list path for $text', async ({ text, expected }) => {

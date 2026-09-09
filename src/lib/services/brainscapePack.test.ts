@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { brainscapeUrls, deckLinks, fetchPack, fetchPackEvents, fetchPackSet, fetchPackSetEvents, fetchPastedEvents, isPackSetUrl, isPackUrl, packSetLinks, spanishSides } from './brainscapePack';
+import { brainscapeUrls, deckLinks, fetchPack, fetchPackEvents, fetchPackSet, fetchPackSetEvents, fetchPastedEvents, isPackSetUrl, isPackUrl, mixedPasteLine, packSetLinks, spanishSides } from './brainscapePack';
 
 const packId = '21648778';
 const packUrl = `https://www.brainscape.com/packs/${packId}`;
@@ -824,6 +824,36 @@ test.each(eventSources)('$name preserves the fifteen second request and body tim
       expect(vi.getTimerCount()).toBe(0);
     }
   }
+});
+
+test('mixedPasteLine returns the first bad line verbatim when any token is a Brainscape URL', () => {
+  expect(mixedPasteLine(`${packUrl}\ncasa`)).toBe('casa');
+  expect(mixedPasteLine('https://www.brainscape.com/flashcards/yes/packs/42\ncasa')).toBe('casa');
+  expect(mixedPasteLine(`hola\n${packSetUrl}\nadiós`)).toBe('hola');
+  expect(mixedPasteLine(`${packUrl}\nbuenos días`)).toBe('buenos días');
+  expect(mixedPasteLine(`${packSetUrl}\nhttps://example.com/packs/42`)).toBe('https://example.com/packs/42');
+  expect(mixedPasteLine('hola https://www.brainscape.com/p/5M6OW-LH-D10NR'))
+    .toBe('hola https://www.brainscape.com/p/5M6OW-LH-D10NR');
+  expect(mixedPasteLine(`${packUrl} ${packSetUrl}\ncasa`)).toBe('casa');
+});
+
+test('mixedPasteLine returns null for pure URL pastes and pastes without a Brainscape URL', () => {
+  expect(mixedPasteLine(packUrl)).toBeNull();
+  expect(mixedPasteLine(packSetUrl)).toBeNull();
+  expect(mixedPasteLine(`${packUrl}\n${packSetUrl}`)).toBeNull();
+  expect(mixedPasteLine(`${packUrl} ${packSetUrl}`)).toBeNull();
+  expect(mixedPasteLine(`${packUrl}\t${packSetUrl}`)).toBeNull();
+  expect(mixedPasteLine('hola\nbuenos días\nadiós')).toBeNull();
+  expect(mixedPasteLine('')).toBeNull();
+  expect(mixedPasteLine(' \n\t ')).toBeNull();
+  expect(mixedPasteLine('https://example.com/packs/42')).toBeNull();
+  expect(mixedPasteLine('https://www.brainscape.com/learn/spanish')).toBeNull();
+});
+
+test('mixedPasteLine ignores blank lines and preserves whitespace on the bad line', () => {
+  expect(mixedPasteLine(`\n \t\n${packUrl}\n\n  buenos días\t\n\n`)).toBe('  buenos días\t');
+  expect(mixedPasteLine(`\r\n${packSetUrl}\r\n\t \r\n  buenos días\t\r\n`)).toBe('  buenos días\t');
+  expect(mixedPasteLine(`\n \t\n${packUrl}\n\n${packSetUrl}\n \t\n`)).toBeNull();
 });
 
 test.each([
