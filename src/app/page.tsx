@@ -13,7 +13,9 @@ function useAnkiRun() {
   const [results, setResults] = useState<WordResult[]>([]);
   const [backfillReport, setBackfillReport] = useState<AudioBackfillReport | null>(null);
   const [generationReport, setGenerationReport] = useState<{ audio: GenerationAudioReport; capReached: boolean } | null>(null);
-  const [linkProgress, setLinkProgress] = useState<{ total: number; finished: number } | null>(null);
+  const [linkProgress, setLinkProgress] = useState<{
+    total: number; finished: number; decks: { href: string; title: string | null }[];
+  } | null>(null);
   const pendingCount = api.anki.pendingCount.useQuery();
   const declinedCount = api.anki.declinedCount.useQuery();
   const awaitingAudioCount = api.anki.awaitingAudioCount.useQuery();
@@ -74,9 +76,14 @@ function useAnkiRun() {
     },
     onSuccess: async (events) => {
       for await (const event of events) {
-        if ('links' in event) setLinkProgress({ total: event.links.length, finished: 0 });
-        else if ('link' in event) setLinkProgress((progress) => progress && { ...progress, finished: progress.finished + 1 });
-        else if ('result' in event) setResults((previous) => [...previous, event.result]);
+        if ('links' in event) {
+          setLinkProgress({ total: event.links.length, finished: 0, decks: event.links.map((href) => ({ href, title: null })) });
+        } else if ('link' in event) {
+          setLinkProgress((progress) => progress && {
+            ...progress, finished: progress.finished + 1,
+            decks: progress.decks.map((deck) => deck.href === event.link ? { ...deck, title: event.title } : deck),
+          });
+        } else if ('result' in event) setResults((previous) => [...previous, event.result]);
         else if ('send' in event) {
           setResults(event.results);
           setGenerationReport(event);
@@ -99,6 +106,7 @@ export default function HomePage() {
   const {
     sendReport, backfillReport, generationReport, linkProgress, results, pendingCount, declinedCount, awaitingAudioCount, generation, sending, retrying, voicing, isPending, capReached,
   } = useAnkiRun();
+  const flatResults = linkProgress ? results.filter((result) => result.source === undefined) : results;
 
   return (
     <main className="max-w-2xl mx-auto p-6">
@@ -169,8 +177,27 @@ export default function HomePage() {
           <p role="alert" className="text-red-600">{generationReport.audio.message}</p>
         </>
       )}
+      {linkProgress?.decks.map(({ href, title }, index) => {
+        const items = results.filter((result) => result.source === href);
+        const added = items.filter(({ status }) => status === 'added' || status === 'updated').length;
+        const skipped = items.filter(({ status }) => status === 'exists' || status === 'skipped' || status === 'duplicate').length;
+        const failed = items.filter(({ status }) => status === 'error').length;
+        return (
+          <section key={href} aria-live="polite" className="text-sm mb-4">
+            <h2 className="font-semibold mb-2">Pack {index + 1}{title && ` — ${title}`}</h2>
+            {items.length > 0 && (
+              <>
+                <ul className="space-y-2">
+                  {items.map((result, itemIndex) => <ResultLine key={itemIndex} result={result} />)}
+                </ul>
+                <p className="mt-2">{added} added, {skipped} skipped{failed > 0 && `, ${failed} failed`}</p>
+              </>
+            )}
+          </section>
+        );
+      })}
       <ul aria-live="polite" className="text-sm space-y-2">
-        {results.map((result, index) => <ResultLine key={index} result={result} />)}
+        {flatResults.map((result, index) => <ResultLine key={index} result={result} />)}
       </ul>
       <SendFooter
         report={sendReport}

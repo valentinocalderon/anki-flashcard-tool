@@ -83,7 +83,8 @@ function pageRun(pending = 1, declined = 1, awaitingAudio = 0) {
     sendPending: sending, retryDeclined: retrying, generateFromList: generation, backfillAudio: voicing,
   } };
   type PageState = string | SendReport | AudioBackfillReport | WordResult[] | null
-    | { audio: GenerationAudioReport; capReached: boolean } | { total: number; finished: number };
+    | { audio: GenerationAudioReport; capReached: boolean }
+    | { total: number; finished: number; decks: { href: string; title: string | null }[] };
   const state: PageState[] = ['casa'];
   let stateIndex = 0;
   const useState = (initial: PageState) => {
@@ -115,6 +116,7 @@ function pageRun(pending = 1, declined = 1, awaitingAudio = 0) {
   };
   return {
     send, retry, generate, backfill, sending, retrying, generation, voicing, storedCounts, queries,
+    children,
     html: () => renderToStaticMarkup(render()),
     submit: () => {
       const form = children().find((child) => React.isValidElement(child) && child.type === 'form');
@@ -397,6 +399,269 @@ const noSend: SendReport = { status: 'nothing', sent: 0, rejected: 0, pending: 0
 const noBackfill: AudioBackfillReport = {
   status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 0, unspeakable: 0, message: null, failureStage: null,
 };
+
+function resultGroups(html: string) {
+  return [...html.matchAll(/<section\b[^>]*>(.*?)<\/section>/g)].map((match) => {
+    const section = match[1];
+    if (section === undefined) throw new Error('Expected a result section.');
+    return {
+      heading: /<h2\b[^>]*>(.*?)<\/h2>/.exec(section)?.[1],
+      words: [...section.matchAll(/<strong>(.*?)<\/strong>/g)].map((word) => word[1]),
+      tally: /<p\b[^>]*>(.*?)<\/p>/.exec(section)?.[1],
+    };
+  });
+}
+
+test('results without link progress keep the original direct flat list, including sourced results', async () => {
+  const page = pageRun(0, 0);
+  const streamed = deferred<void>();
+  const finish = deferred<void>();
+  const results: WordResult[] = [
+    { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0, source: 'deck-z' },
+    { word: 'hogar', status: 'error', vocabCards: 0, conjugationCards: 0, source: 'deck-a', message: 'Lookup returned HTTP 429.' },
+    { word: 'suelto', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
+  ];
+  page.generate.mockResolvedValueOnce((async function* (): AsyncIterable<RunEvent> {
+    for (const result of results) yield { result };
+    streamed.resolve();
+    await finish.promise;
+    yield { results, audio: { unspeakable: 0, message: null }, capReached: false, send: noSend, backfill: noBackfill };
+  })());
+  const expected = '<ul aria-live="polite" class="text-sm space-y-2">'
+    + '<li class="bg-gray-100 p-3 rounded"><span aria-hidden="true" class="text-xs mr-2">✓</span><strong>casa</strong>: 2 vocab cards</li>'
+    + '<li class="bg-gray-100 p-3 rounded"><span aria-hidden="true" class="text-xs mr-2">!</span><strong>hogar</strong>: Lookup returned HTTP 429.</li>'
+    + '<li class="bg-gray-100 p-3 rounded"><span aria-hidden="true" class="text-xs mr-2">–</span><strong>suelto</strong>: skipped: already stored</li></ul>';
+  page.submit();
+  await streamed.promise;
+  expect(page.html().match(/<ul\b[^>]*>.*?<\/ul>/g)).toEqual([expected]);
+  expect(page.html()).not.toMatch(/<h2\b|\d+ added, \d+ skipped|Deck links finished:/);
+  finish.resolve();
+  await page.generation.run;
+  expect(page.children().map((child) => React.isValidElement(child) ? typeof child.type === 'string' ? child.type : 'component' : null))
+    .toEqual(['h1', 'form', 'ul', 'component']);
+  const list = page.children().find((child) => React.isValidElement(child) && child.type === 'ul');
+  if (!React.isValidElement<{ children: React.ReactNode }>(list)) throw new Error('Expected the direct flat result list.');
+  const keys: (string | null)[] = [];
+  React.Children.forEach(list.props.children, (line) => {
+    if (!React.isValidElement(line)) throw new Error('Expected a result line.');
+    keys.push(line.key);
+  });
+  expect(keys).toEqual(['0', '1', '2']);
+  expect(renderToStaticMarkup(list)).toBe(expected);
+  expect(page.html()).not.toMatch(/<h2\b|\d+ added, \d+ skipped|Deck links finished:/);
+});
+
+test('deck groups show every discovery heading before any deck is fetched', async () => {
+  const page = pageRun(0, 0);
+  const discovered = deferred<void>();
+  const finish = deferred<void>();
+  page.generate.mockResolvedValueOnce((async function* (): AsyncIterable<RunEvent> {
+    yield { links: ['deck-z', 'deck-a'] };
+    discovered.resolve();
+    await finish.promise;
+  })());
+  page.submit();
+  await discovered.promise;
+  expect(resultGroups(page.html())).toEqual([
+    { heading: 'Pack 1', words: [], tally: undefined },
+    { heading: 'Pack 2', words: [], tally: undefined },
+  ]);
+  expect(page.html().match(/<section\b[^>]*><h2\b[^>]*>Pack [12]<\/h2><\/section>/g)).toHaveLength(2);
+  expect(page.html()).toContain('Deck links finished: 0 of 2');
+  finish.resolve();
+  await page.generation.run;
+});
+
+test('deck groups keep discovery order and place streamed and final results by their own source', async () => {
+  const page = pageRun(0, 0);
+  const streamed = deferred<void>();
+  const finish = deferred<void>();
+  const results: [WordResult, WordResult, WordResult] = [
+    { word: 'viajar', status: 'added', vocabCards: 2, conjugationCards: 3, source: 'deck-a' },
+    { word: 'suelto', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
+    { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0, source: 'deck-z' },
+  ];
+  page.generate.mockResolvedValueOnce((async function* (): AsyncIterable<RunEvent> {
+    yield { links: ['deck-z', 'deck-a'] };
+    yield { link: 'deck-a', title: 'Travel' };
+    yield { link: 'deck-z', title: 'Common Greetings' };
+    for (const result of results) yield { result };
+    streamed.resolve();
+    await finish.promise;
+    yield { results, audio: { unspeakable: 0, message: null }, capReached: false, send: noSend, backfill: noBackfill };
+  })());
+  const expected = [
+    { heading: 'Pack 1 — Common Greetings', words: ['casa'], tally: '1 added, 0 skipped' },
+    { heading: 'Pack 2 — Travel', words: ['viajar'], tally: '1 added, 0 skipped' },
+  ];
+  page.submit();
+  await streamed.promise;
+  expect(resultGroups(page.html())).toEqual(expected);
+  expect(page.html()).toContain('Deck links finished: 2 of 2');
+  const flat = page.html().replace(/<section\b[^>]*>.*?<\/section>/g, '');
+  expect(flat.match(/<li\b[^>]*>.*?<\/li>/g)).toEqual([
+    '<li class="bg-gray-100 p-3 rounded"><span aria-hidden="true" class="text-xs mr-2">–</span><strong>suelto</strong>: skipped: already stored</li>',
+  ]);
+  expect(page.children().filter((child) => React.isValidElement(child) && child.type === 'ul').map((list) => renderToStaticMarkup(list)))
+    .toEqual(['<ul aria-live="polite" class="text-sm space-y-2"><li class="bg-gray-100 p-3 rounded"><span aria-hidden="true" class="text-xs mr-2">–</span><strong>suelto</strong>: skipped: already stored</li></ul>']);
+  expect(page.html()).toMatch(/<h2\b[^>]*>Pack 1 — Common Greetings<\/h2><ul\b[^>]*><li\b[^>]*>.*?<strong>casa<\/strong>.*?<\/li><\/ul><p\b[^>]*>1 added, 0 skipped<\/p>/);
+  finish.resolve();
+  await page.generation.run;
+  expect(resultGroups(page.html())).toEqual(expected);
+  expect(page.html().match(/<li\b/g)).toHaveLength(3);
+});
+
+test('deck groups use bare Pack 2 when its link title is null', async () => {
+  const page = pageRun(0, 0);
+  page.generate.mockResolvedValueOnce((async function* (): AsyncIterable<RunEvent> {
+    yield { links: ['deck-z', 'deck-a'] };
+    yield { link: 'deck-z', title: 'Common Greetings' };
+    yield { link: 'deck-a', title: null };
+    yield { result: { word: 'viajar', status: 'skipped', vocabCards: 0, conjugationCards: 0, source: 'deck-a' } };
+  })());
+  page.submit();
+  await page.generation.run;
+  expect(resultGroups(page.html())).toEqual([
+    { heading: 'Pack 1 — Common Greetings', words: [], tally: undefined },
+    { heading: 'Pack 2', words: ['viajar'], tally: '0 added, 1 skipped' },
+  ]);
+});
+
+test('deck groups tally every status as items while results stream, including duplicate and error', async () => {
+  const page = pageRun(0, 0);
+  const steps: { result: WordResult; tally: string }[] = [
+    { result: { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 }, tally: '1 added, 0 skipped' },
+    { result: { word: 'hablar', status: 'updated', vocabCards: 0, conjugationCards: 4 }, tally: '2 added, 0 skipped' },
+    { result: { word: 'calle', status: 'exists', vocabCards: 0, conjugationCards: 0 }, tally: '2 added, 1 skipped' },
+    { result: { word: 'sol', status: 'skipped', vocabCards: 0, conjugationCards: 0 }, tally: '2 added, 2 skipped' },
+    { result: { word: 'casa', status: 'duplicate', vocabCards: 0, conjugationCards: 0 }, tally: '2 added, 3 skipped' },
+    { result: { word: 'hogar', status: 'error', vocabCards: 0, conjugationCards: 0, message: 'Lookup returned HTTP 429.' },
+      tally: '2 added, 3 skipped, 1 failed' },
+  ];
+  const checkpoints = steps.map((step) => ({ ...step, consumed: deferred<void>(), next: deferred<void>() }));
+  const results = steps.map(({ result }) => ({ ...result, source: 'deck-z' }));
+  page.generate.mockResolvedValueOnce((async function* (): AsyncIterable<RunEvent> {
+    yield { links: ['deck-z'] };
+    yield { link: 'deck-z', title: 'Common Greetings' };
+    for (const step of checkpoints) {
+      yield { result: { ...step.result, source: 'deck-z' } };
+      step.consumed.resolve();
+      await step.next.promise;
+    }
+    yield { results, audio: { unspeakable: 0, message: null }, capReached: false, send: noSend, backfill: noBackfill };
+  })());
+  page.submit();
+  for (const step of checkpoints) {
+    await step.consumed.promise;
+    expect(resultGroups(page.html()).map(({ tally }) => tally)).toEqual([step.tally]);
+    step.next.resolve();
+  }
+  await page.generation.run;
+  expect(resultGroups(page.html())).toEqual([
+    { heading: 'Pack 1 — Common Greetings', words: ['casa', 'hablar', 'calle', 'sol', 'casa', 'hogar'],
+      tally: '2 added, 3 skipped, 1 failed' },
+  ]);
+  expect(page.html().match(/<li\b/g)).toHaveLength(6);
+  expect(page.html()).toContain('<strong>casa</strong>: skipped: duplicate in this run');
+  expect(page.html()).toContain('<span aria-hidden="true" class="text-xs mr-2">!</span><strong>hogar</strong>: Lookup returned HTTP 429.');
+});
+
+test('word-list results keep their exact flat markup with no heading or tally during and after streaming', async () => {
+  const page = pageRun(0, 0);
+  const streamed = deferred<void>();
+  const finish = deferred<void>();
+  const results: WordResult[] = [
+    { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 },
+    { word: 'hogar', status: 'error', vocabCards: 0, conjugationCards: 0, message: 'Lookup returned HTTP 429.' },
+  ];
+  page.generate.mockResolvedValueOnce((async function* (): AsyncIterable<RunEvent> {
+    for (const result of results) yield { result };
+    streamed.resolve();
+    await finish.promise;
+    yield { results, audio: { unspeakable: 0, message: null }, capReached: false, send: noSend, backfill: noBackfill };
+  })());
+  const expected = '<ul aria-live="polite" class="text-sm space-y-2">'
+    + '<li class="bg-gray-100 p-3 rounded"><span aria-hidden="true" class="text-xs mr-2">✓</span><strong>casa</strong>: 2 vocab cards</li>'
+    + '<li class="bg-gray-100 p-3 rounded"><span aria-hidden="true" class="text-xs mr-2">!</span><strong>hogar</strong>: Lookup returned HTTP 429.</li></ul>';
+  page.submit();
+  await streamed.promise;
+  expect(page.html().match(/<ul\b[^>]*>.*?<\/ul>/g)).toEqual([expected]);
+  expect(page.html()).not.toMatch(/<h2\b|\d+ added, \d+ skipped|Deck links finished:/);
+  finish.resolve();
+  await page.generation.run;
+  expect(page.html().match(/<ul\b[^>]*>.*?<\/ul>/g)).toEqual([expected]);
+  expect(page.html()).not.toMatch(/<h2\b|\d+ added, \d+ skipped|Deck links finished:/);
+});
+
+test.each(['word list', 'failed request'] as const)('deck groups clear before a new %s', async (nextRun) => {
+  const page = pageRun(0, 0);
+  page.generate.mockResolvedValueOnce((async function* (): AsyncIterable<RunEvent> {
+    yield { links: ['deck-z'] };
+    yield { link: 'deck-z', title: 'Common Greetings' };
+    yield { result: { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0, source: 'deck-z' } };
+  })());
+  page.submit();
+  await page.generation.run;
+  expect(resultGroups(page.html())).toEqual([
+    { heading: 'Pack 1 — Common Greetings', words: ['casa'], tally: '1 added, 0 skipped' },
+  ]);
+  const started = deferred<void>();
+  const finish = deferred<void>();
+  page.generate.mockImplementationOnce(async () => {
+    started.resolve();
+    await finish.promise;
+    if (nextRun === 'failed request') throw new Error('Brainscape pack request failed: HTTP 503.');
+    return reportEvents({ results: [{ word: 'sol', status: 'added', vocabCards: 1, conjugationCards: 0 }],
+      audio: { unspeakable: 0, message: null }, capReached: false, send: noSend, backfill: noBackfill });
+  });
+  page.submit();
+  await started.promise;
+  expect(resultGroups(page.html())).toEqual([]);
+  expect(page.html()).not.toMatch(/<h2\b|\d+ added, \d+ skipped|<strong>casa<\/strong>|Deck links finished:/);
+  finish.resolve();
+  if (nextRun === 'failed request') {
+    await expect(page.generation.run).rejects.toThrow('Brainscape pack request failed: HTTP 503.');
+    expect(page.html()).toContain('<p role="alert" class="text-red-600">Brainscape pack request failed: HTTP 503.</p>');
+  } else {
+    await page.generation.run;
+    expect(page.html()).toContain('<strong>sol</strong>: 1 vocab card');
+  }
+  expect(resultGroups(page.html())).toEqual([]);
+  expect(page.html()).not.toMatch(/<h2\b|\d+ added, \d+ skipped/);
+});
+
+test.each(['deck fetch', 'after result'] as const)('deck groups preserve observed progress after a failure during %s', async (stage) => {
+  const page = pageRun(0, 0);
+  const message = stage === 'deck fetch' ? 'Brainscape deck request failed: HTTP 503.' : 'AnkiConnect request timed out: The operation timed out';
+  page.generate.mockResolvedValueOnce((async function* (): AsyncIterable<RunEvent> {
+    yield { links: ['deck-z', 'deck-a'] };
+    yield { link: 'deck-z', title: 'Common Greetings' };
+    if (stage === 'after result') {
+      yield { link: 'deck-a', title: null };
+      yield { result: { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0, source: 'deck-z' } };
+    }
+    page.storedCounts.pending = 3;
+    page.storedCounts.declined = 2;
+    page.storedCounts.awaitingAudio = 1;
+    throw new Error(message);
+  })());
+  page.submit();
+  await expect(page.generation.run).rejects.toThrow(message);
+  expect(resultGroups(page.html())).toEqual([
+    { heading: 'Pack 1 — Common Greetings', words: stage === 'after result' ? ['casa'] : [],
+      tally: stage === 'after result' ? '1 added, 0 skipped' : undefined },
+    { heading: 'Pack 2', words: [], tally: undefined },
+  ]);
+  expect(page.html()).toContain(`<p role="alert" class="text-red-600">${message}</p>`);
+  expect(page.html()).not.toContain('Anki is not running');
+  expect(page.html()).not.toContain('role="status"');
+  expect(page.html()).toContain('Send 3 pending cards');
+  expect(page.html()).toContain('Retry 2 declined cards');
+  expect(page.html()).toContain('Voice 1 card waiting for audio');
+  expect(page.queries.pending.refetch).toHaveBeenCalledOnce();
+  expect(page.queries.declined.refetch).toHaveBeenCalledOnce();
+  expect(page.queries.awaitingAudio.refetch).toHaveBeenCalledOnce();
+});
 
 test.each([true, false])('the page streams progress and stays pending until completion (pack: %s)', async (pack) => {
   const page = pageRun();
