@@ -53,3 +53,16 @@ test('formats an error using its message', () => {
     message: 'Lookup unavailable; retry later',
   })).toBe('Lookup unavailable; retry later');
 });
+
+test.each([
+  { status: 'added' as const, vocabCards: 2, expected: '2 vocab cards; 0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.' },
+  { status: 'added' as const, vocabCards: 0, expected: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.' },
+  { status: 'updated' as const, vocabCards: 1, expected: '1 vocab card added; updated: stored card changed; check Anki if this card was already sent; 0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.' },
+  { status: 'updated' as const, vocabCards: 0, expected: 'updated: stored card changed; check Anki if this card was already sent; 0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.' },
+  { status: 'exists' as const, vocabCards: 0, expected: 'already stored; 0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.' },
+])('renders a gated result with its stored outcome: $status, $vocabCards vocab cards', ({ status, vocabCards, expected }) => {
+  expect(formatResultLine({
+    word: 'Nos gusta', status, vocabCards, conjugationCards: 0,
+    message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.',
+  })).toBe(expected);
+});

@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 const conjugationPatternSchema = z.enum(['regular', 'e-ie', 'o-ue', 'e-i', 'u-ue', 'irregular']);
 
-const conjugationClassSchema = z.object({
+export const conjugationClassSchema = z.object({
   ending: z.enum(['ar', 'er', 'ir']),
   present: conjugationPatternSchema,
   preterite: conjugationPatternSchema,

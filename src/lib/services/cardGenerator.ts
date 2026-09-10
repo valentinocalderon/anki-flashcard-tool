@@ -1,6 +1,11 @@
-import type { Card, WordInfo } from '@/lib/types';
+import { conjugationClassSchema, type Card, type WordInfo } from '@/lib/types';
 import { loadConfig } from '@/lib/config';
 import type { BrainscapeItem } from './brainscapeSides';
+
+const knownNonVerbTypes = new Set([
+  'noun', 'adjective', 'adverb', 'pronoun', 'preposition', 'conjunction',
+  'interjection', 'article', 'determiner', 'number', 'phrase', 'expression',
+]);
 
 export type LookedUpItem = {
   forms: (BrainscapeItem['forms'][number] & { info: WordInfo })[];
@@ -88,7 +93,7 @@ function generateItemCards(item: LookedUpItem): GeneratedCard[] {
 export function conjugationCards(
   wordInfo: WordInfo,
   cardedKeys: ReadonlySet<string>
-): { cards: Card[]; claims: { front: string; key: string }[] } {
+): { cards: Card[]; claims: { front: string; key: string }[]; message?: string } {
   if (typeof wordInfo.error === 'string') {
     throw new Error(`Cannot generate cards: lookup returned error "${wordInfo.error}".`);
   }
@@ -97,9 +102,25 @@ export function conjugationCards(
   const claimedKeys = new Set<string>();
   const claims: { front: string; key: string }[] = [];
   const classification = wordInfo.conjugationClass;
+  const spanish = wordInfo.spanish.trim().normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 
   if (!config.cardTypes.conjugation || !classification || !wordInfo.conjugations) {
     return { cards, claims };
+  }
+  if (
+    !conjugationClassSchema.shape.ending.safeParse(classification.ending).success ||
+    !new RegExp(`^[a-z]*${classification.ending}(?:me|te|se|nos|os|lo|la|los|las|le|les){0,3}$`).test(spanish)
+  ) {
+    return {
+      cards, claims,
+      message: `0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -${classification.ending}.`,
+    };
+  }
+  if (wordInfo.type !== null && knownNonVerbTypes.has(wordInfo.type.trim().toLowerCase())) {
+    return {
+      cards, claims,
+      message: `0 conjugation cards: lookup type "${wordInfo.type}" is a known non-verb type.`,
+    };
   }
 
   for (const tense of config.tenses) {

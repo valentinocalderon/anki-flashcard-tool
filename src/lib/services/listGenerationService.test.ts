@@ -1677,6 +1677,7 @@ test('adds a noun and its example once, then reports skipped using the normalize
   const first: WordResult[] = (await generateForWords(db, ' Casa \nCASA\n', lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results;
 
   expect(first).toEqual([{ word: 'Casa', status: 'added', vocabCards: 2, conjugationCards: 0 }]);
+  expect(first.map(formatResultLine)).toEqual(['2 vocab cards']);
   expect((await generateForWords(db, 'casa', lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl))).results).toEqual([
     { word: 'casa', status: 'skipped', vocabCards: 0, conjugationCards: 0 },
   ]);
@@ -1691,6 +1692,81 @@ test('adds a noun and its example once, then reports skipped using the normalize
   expect(storedCards[1]).toMatchObject({
     wordId: storedWords[0]?.id, kind: 'example', front: 'La ____ es grande.',
   });
+});
+
+test('reports a gated word alongside its vocab cards', async () => {
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>().mockResolvedValue({
+    ...regularVerb, english: 'place', spanish: 'lugar', type: 'noun',
+  });
+
+  const result = await generateForWords(db, 'lugar', lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  expect(result.results).toEqual([{
+    word: 'lugar', status: 'added', vocabCards: 1, conjugationCards: 0,
+    message: '0 conjugation cards: lookup type "noun" is a known non-verb type.',
+  }]);
+  expect(result.results.map(formatResultLine)).toEqual([
+    '1 vocab card; 0 conjugation cards: lookup type "noun" is a known non-verb type.',
+  ]);
+  expect(await db.select({ kind: cards.kind, front: cards.front, back: cards.back }).from(cards)).toEqual([
+    { kind: 'basic', front: 'place', back: 'lugar' },
+  ]);
+  expect(await db.select().from(conjugationPatterns)).toEqual([]);
+});
+
+test.each([
+  { outcome: 'exists', side: 'lugar', query: 'sitio', expected: 'already stored; 0 conjugation cards: lookup type "noun" is a known non-verb type.' },
+  { outcome: 'updated', side: 'lugar / sitio', query: 'lugar', expected: 'updated: stored card changed; check Anki if this card was already sent; 0 conjugation cards: lookup type "noun" is a known non-verb type.' },
+])('reports a gated word when its vocab card is $outcome', async ({ outcome, side, query, expected }) => {
+  const info: WordInfo = { ...regularVerb, english: 'place', spanish: 'lugar', type: 'noun' };
+  await db.insert(words).values({ id: 1, query, info: JSON.stringify(info), lookedUpAt: 123 });
+  await db.insert(cards).values({
+    id: 1, wordId: 1, deck: 'Spanish::Vocab', kind: 'basic', front: 'place', back: query,
+    tags: '["auto-generated"]', createdAt: 123, ankiNoteId: 987654, sentAt: 456,
+  });
+  serveSides([side]);
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>().mockResolvedValue(info);
+
+  const result = await generateForWords(db, singleDeckUrl, lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  expect(result.results).toEqual([{
+    word: side, source: '/flashcards/test/packs/42', status: outcome, vocabCards: 0, conjugationCards: 0,
+    message: '0 conjugation cards: lookup type "noun" is a known non-verb type.',
+  }]);
+  expect(result.results.map(formatResultLine)).toEqual([expected]);
+  expect(await db.select({ id: cards.id, kind: cards.kind, back: cards.back, ankiNoteId: cards.ankiNoteId, sentAt: cards.sentAt }).from(cards)).toEqual([
+    { id: 1, kind: 'basic', back: outcome === 'updated' ? 'lugar / sitio' : 'sitio', ankiNoteId: 987654, sentAt: 456 },
+  ]);
+  expect(await db.select().from(conjugationPatterns)).toEqual([]);
+});
+
+test.each([
+  { failure: 'request', message: 'Voice request timed out after 1000 ms' },
+  { failure: 'http', message: 'ElevenLabs request returned HTTP 503: Service Unavailable; check the response before retrying.' },
+])('a gated word preserves an observed voice $failure failure and the prior committed cards', async ({ failure, message }) => {
+  fetchImpl.mockResolvedValueOnce(new Response(new Uint8Array([73, 68, 51])))
+    .mockResolvedValueOnce(new Response(new Uint8Array([73, 68, 51])));
+  if (failure === 'request') fetchImpl.mockRejectedValueOnce(new Error('Voice request timed out after 1000 ms'));
+  else fetchImpl.mockResolvedValueOnce(new Response('Service Unavailable', { status: 503 }));
+  const lookup = vi.fn<(word: string) => Promise<WordInfo>>()
+    .mockResolvedValueOnce(noun)
+    .mockResolvedValueOnce({ ...regularVerb, english: 'to eat', spanish: 'comer' });
+
+  const result = await generateForWords(db, 'casa\ncomer', lookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  expect(result.results).toEqual([
+    { word: 'casa', status: 'added', vocabCards: 2, conjugationCards: 0 },
+    { word: 'comer', status: 'error', vocabCards: 0, conjugationCards: 0, message },
+  ]);
+  expect(result.results.map(formatResultLine)).toEqual(['2 vocab cards', message]);
+  expect(await db.select({ kind: cards.kind, front: cards.front, back: cards.back }).from(cards).orderBy(cards.id)).toEqual([
+    { kind: 'basic', front: 'house', back: 'la casa' },
+    { kind: 'example', front: 'La ____ es grande.', back: 'casa (house)<br>(The house is big.)' },
+  ]);
+  expect(await db.select({ query: words.query }).from(words).orderBy(words.id)).toEqual([
+    { query: 'casa' }, { query: 'comer' },
+  ]);
+  expect(await db.select().from(conjugationPatterns)).toEqual([]);
 });
 
 test('reports exists when a cached word with no cards generates a stored front in the same deck', async () => {

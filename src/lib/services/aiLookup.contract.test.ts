@@ -1,4 +1,5 @@
 import { createClient, type Client } from '@libsql/client';
+import { eq } from 'drizzle-orm';
 import type OpenAI from 'openai';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { ZodError } from 'zod';
@@ -246,6 +247,7 @@ test('generation stores cards from a supported OpenAI response with null error',
   const result = await generateForWords(db, 'casa', openaiLookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
 
   expect(result.results).toEqual([{ word: 'casa', status: 'added', vocabCards: 1, conjugationCards: 0 }]);
+  expect(result.results.map(formatResultLine)).toEqual(['1 vocab card']);
   expect(await db.select({ front: cards.front, back: cards.back }).from(cards)).toEqual([
     { front: 'house', back: 'la casa' },
   ]);
@@ -272,6 +274,107 @@ test.each([null, 'ser'])('generation drops an unusable ending of %s and reports 
   expect(await db.select({ query: words.query, info: words.info }).from(words)).toEqual([
     { query: 'ser', info: JSON.stringify({ ...payload, conjugationClass: null }) },
   ]);
+  expect(createCompletion).toHaveBeenCalledOnce();
+});
+
+test('generation reports a gated phrase and leaves its shared patterns for the next verb', async () => {
+  const phrase = {
+    english: 'we like', spanish: 'Nos gusta', gender: null, article: null, type: 'verb',
+    example: 'Nos gusta la música. (We like music.)', exampleWord: 'Nos gusta',
+    conjugations: { present: { yo: 'gusto' }, preterite: { yo: 'gusté' } },
+    conjugationClass: { ending: 'ar', present: 'regular', preterite: 'regular' }, error: null,
+  };
+  respondWith({ items: ['Nos gusta'] });
+  respondWith(phrase);
+
+  const phraseResult = await generateForWords(db, 'Nos gusta', openaiLookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  expect(phraseResult.results).toEqual([{
+    word: 'Nos gusta', status: 'added', vocabCards: 2, conjugationCards: 0,
+    message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.',
+  }]);
+  expect(phraseResult.results.map(formatResultLine)).toEqual([
+    '2 vocab cards; 0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.',
+  ]);
+  expect(await db.select({ deck: cards.deck, kind: cards.kind, front: cards.front, back: cards.back }).from(cards).orderBy(cards.id)).toEqual([
+    { deck: 'Spanish::Vocab', kind: 'basic', front: 'we like', back: 'Nos gusta' },
+    {
+      deck: 'Spanish::Vocab', kind: 'example', front: '____ la música.',
+      back: 'Nos gusta (we like)<br>(We like music.)',
+    },
+  ]);
+  expect(await db.select().from(conjugationPatterns)).toEqual([]);
+  const cachedWords = await db.select({ query: words.query, info: words.info }).from(words);
+  expect(cachedWords.map(({ query, info }) => {
+    const storedInfo: unknown = JSON.parse(info);
+    return { query, info: storedInfo };
+  })).toEqual([{
+    query: 'nos gusta', info: {
+      english: 'we like', spanish: 'Nos gusta', gender: null, article: null, type: 'verb',
+      example: 'Nos gusta la música. (We like music.)', exampleWord: 'Nos gusta',
+      conjugations: { present: { yo: 'gusto' }, preterite: { yo: 'gusté' } },
+      conjugationClass: { ending: 'ar', present: 'regular', preterite: 'regular' }, error: null,
+    },
+  }]);
+  expect(createCompletion).toHaveBeenCalledTimes(2);
+
+  const verb = {
+    ...phrase, english: 'to speak', spanish: 'hablar', example: null, exampleWord: null,
+    conjugations: { present: { yo: 'hablo' }, preterite: { yo: 'hablé' } },
+  };
+  respondWith(verb);
+
+  const verbResult = await generateForWords(db, 'hablar', openaiLookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  expect(verbResult.results).toEqual([{ word: 'hablar', status: 'added', vocabCards: 1, conjugationCards: 2 }]);
+  expect(verbResult.results.map(formatResultLine)).toEqual(['1 vocab card plus 2 conjugation cards']);
+  expect(await db.select({ deck: cards.deck, kind: cards.kind, front: cards.front, back: cards.back }).from(cards).orderBy(cards.id)).toEqual([
+    { deck: 'Spanish::Vocab', kind: 'basic', front: 'we like', back: 'Nos gusta' },
+    {
+      deck: 'Spanish::Vocab', kind: 'example', front: '____ la música.',
+      back: 'Nos gusta (we like)<br>(We like music.)',
+    },
+    { deck: 'Spanish::Vocab', kind: 'basic', front: 'to speak', back: 'hablar' },
+    {
+      deck: 'Spanish::Conjugation', kind: 'conjugation',
+      front: 'Conjugate hablar in present (regular -ar)', back: 'yo: hablo',
+    },
+    {
+      deck: 'Spanish::Conjugation', kind: 'conjugation',
+      front: 'Conjugate hablar in preterite (regular -ar)', back: 'yo: hablé',
+    },
+  ]);
+  expect(await db.select({
+    ending: conjugationPatterns.ending, pattern: conjugationPatterns.pattern,
+    tense: conjugationPatterns.tense, front: cards.front,
+  }).from(conjugationPatterns).innerJoin(cards, eq(cards.id, conjugationPatterns.cardId)).orderBy(conjugationPatterns.id)).toEqual([
+    { ending: 'ar', pattern: 'regular', tense: 'present', front: 'Conjugate hablar in present (regular -ar)' },
+    { ending: 'ar', pattern: 'regular', tense: 'preterite', front: 'Conjugate hablar in preterite (regular -ar)' },
+  ]);
+  expect(createCompletion).toHaveBeenCalledTimes(3);
+});
+
+test('generation reports an ending mismatch without claiming a pattern', async () => {
+  respondWith({
+    english: 'to eat', spanish: 'comer', gender: null, article: null, type: 'verb',
+    example: null, exampleWord: null, error: null,
+    conjugations: { present: { yo: 'como' }, preterite: { yo: 'comí' } },
+    conjugationClass: { ending: 'ar', present: 'regular', preterite: 'regular' },
+  });
+
+  const result = await generateForWords(db, 'comer', openaiLookup, fetchImpl, createSpanishVoice(loadConfig().audio, fetchImpl));
+
+  expect(result.results).toEqual([{
+    word: 'comer', status: 'added', vocabCards: 1, conjugationCards: 0,
+    message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.',
+  }]);
+  expect(result.results.map(formatResultLine)).toEqual([
+    '1 vocab card; 0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.',
+  ]);
+  expect(await db.select({ kind: cards.kind, front: cards.front, back: cards.back }).from(cards)).toEqual([
+    { kind: 'basic', front: 'to eat', back: 'comer' },
+  ]);
+  expect(await db.select().from(conjugationPatterns)).toEqual([]);
   expect(createCompletion).toHaveBeenCalledOnce();
 });
 

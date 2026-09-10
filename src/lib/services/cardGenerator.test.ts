@@ -447,6 +447,37 @@ test('a repeat pattern yields no conjugation cards and leaves the supplied keys 
   expect([...cardedKeys]).toEqual(['ar-regular-present', 'ar-regular-preterite']);
 });
 
+test('reports a gated Spanish side or non-verb type without cards or claims', () => {
+  const infos: WordInfo[] = [
+    { ...regularVerb, spanish: 'Nos gusta' },
+    { ...regularVerb, spanish: 'comer' },
+    { ...regularVerb, spanish: 'lugar', type: 'noun' },
+  ];
+
+  expect(infos.map((info) => conjugationCards(info, new Set()))).toEqual([
+    { cards: [], claims: [], message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.' },
+    { cards: [], claims: [], message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.' },
+    { cards: [], claims: [], message: '0 conjugation cards: lookup type "noun" is a known non-verb type.' },
+  ]);
+});
+
+test.each([undefined, null])('does not report a gated side without classification or conjugations: %s', (missing) => {
+  expect(conjugationCards({ ...regularVerb, spanish: 'Nos gusta', conjugationClass: missing }, new Set()))
+    .toEqual({ cards: [], claims: [] });
+  expect(conjugationCards({ ...regularVerb, spanish: 'Nos gusta', conjugations: missing }, new Set()))
+    .toEqual({ cards: [], claims: [] });
+});
+
+test('does not report a gated side when conjugation generation is disabled', () => {
+  const settings = loadConfig();
+  vi.spyOn(config, 'loadConfig').mockReturnValue({
+    ...settings, cardTypes: { ...settings.cardTypes, conjugation: false },
+  });
+
+  expect(conjugationCards({ ...regularVerb, spanish: 'Nos gusta' }, new Set()))
+    .toEqual({ cards: [], claims: [] });
+});
+
 test('deduplicates each tense independently', () => {
   const result = conjugationCards(regularVerb, new Set(['ar-regular-present']));
   expect(result.claims).toEqual([
@@ -463,14 +494,226 @@ test.each([undefined, null])('skips conjugations when classification is %s', (co
   });
 });
 
-test.each(['Verb', 'verbo', 'noun'])(
-  'uses classification and forms as the verb signal regardless of the type string: %s',
+test.each(['Verb', 'verbo', null])(
+  'keeps conjugation cards and claims for an eligible word with an unrecognised or null type: %s',
   (type) => {
-    expect(conjugationCards({ ...regularVerb, type }, new Set())).toEqual(
-      conjugationCards(regularVerb, new Set()),
-    );
+    expect(conjugationCards({ ...regularVerb, type }, new Set())).toEqual({
+      cards: [
+        {
+          deck: 'Spanish::Conjugation', kind: 'conjugation',
+          front: 'Conjugate hablar in present (regular -ar)',
+          back: 'yo: hablo<br>tú: hablas<br>él/ella: habla<br>nosotros: hablamos<br>vosotros: habláis<br>ellos: hablan',
+          tags: ['auto-generated'],
+        },
+        {
+          deck: 'Spanish::Conjugation', kind: 'conjugation',
+          front: 'Conjugate hablar in preterite (regular -ar)',
+          back: 'yo: hablé<br>tú: hablaste<br>él/ella: habló<br>nosotros: hablamos<br>vosotros: hablasteis<br>ellos: hablaron',
+          tags: ['auto-generated'],
+        },
+      ],
+      claims: [
+        { front: 'Conjugate hablar in present (regular -ar)', key: 'ar-regular-present' },
+        { front: 'Conjugate hablar in preterite (regular -ar)', key: 'ar-regular-preterite' },
+      ],
+    });
   },
 );
+
+test.each(['Nos gusta', 'vamos a hablar', 'vamos\thablar', 'vamos\nhablar', 'vamos\u00a0hablar', 'habla', '', '   '])(
+  'skips conjugation cards and claims for an ineligible Spanish side despite valid classification: %j',
+  (spanish) => {
+    expect(conjugationCards({ ...regularVerb, spanish }, new Set())).toEqual({
+      cards: [], claims: [],
+      message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.',
+    });
+  },
+);
+
+test.each([
+  { spanish: 'lugar', ending: 'ar' as const },
+  { spanish: 'mar', ending: 'ar' as const },
+  { spanish: 'mujer', ending: 'er' as const },
+  { spanish: 'taller', ending: 'er' as const },
+  { spanish: 'ayer', ending: 'er' as const },
+])(
+  'skips conjugation cards and claims for the noun $spanish despite matching classification',
+  ({ spanish, ending }) => {
+    expect(conjugationCards({
+      ...regularVerb, spanish, type: 'noun',
+      conjugationClass: { ending, present: 'regular', preterite: 'regular' },
+    }, new Set())).toEqual({
+      cards: [], claims: [],
+      message: '0 conjugation cards: lookup type "noun" is a known non-verb type.',
+    });
+  },
+);
+
+test.each([
+  { type: 'noun', message: '0 conjugation cards: lookup type "noun" is a known non-verb type.' },
+  { type: 'adjective', message: '0 conjugation cards: lookup type "adjective" is a known non-verb type.' },
+  { type: 'adverb', message: '0 conjugation cards: lookup type "adverb" is a known non-verb type.' },
+  { type: 'pronoun', message: '0 conjugation cards: lookup type "pronoun" is a known non-verb type.' },
+  { type: 'preposition', message: '0 conjugation cards: lookup type "preposition" is a known non-verb type.' },
+  { type: 'conjunction', message: '0 conjugation cards: lookup type "conjunction" is a known non-verb type.' },
+  { type: 'interjection', message: '0 conjugation cards: lookup type "interjection" is a known non-verb type.' },
+  { type: 'article', message: '0 conjugation cards: lookup type "article" is a known non-verb type.' },
+  { type: 'determiner', message: '0 conjugation cards: lookup type "determiner" is a known non-verb type.' },
+  { type: 'number', message: '0 conjugation cards: lookup type "number" is a known non-verb type.' },
+  { type: 'phrase', message: '0 conjugation cards: lookup type "phrase" is a known non-verb type.' },
+  { type: 'expression', message: '0 conjugation cards: lookup type "expression" is a known non-verb type.' },
+  { type: ' \tNoUn\n', message: '0 conjugation cards: lookup type " \tNoUn\n" is a known non-verb type.' },
+])('skips conjugation cards and claims for a known non-verb type on hablar: $type', ({ type, message }) => {
+  expect(conjugationCards({ ...regularVerb, type }, new Set())).toEqual({ cards: [], claims: [], message });
+});
+
+test.each([
+  {
+    spanish: 'comer', ending: 'er' as const,
+    present: 'como', preterite: 'comí', presentBack: 'yo: como', preteriteBack: 'yo: comí',
+    presentFront: 'Conjugate comer in present (regular -er)',
+    preteriteFront: 'Conjugate comer in preterite (regular -er)',
+    presentKey: 'er-regular-present', preteriteKey: 'er-regular-preterite',
+  },
+  {
+    spanish: 'vivir', ending: 'ir' as const,
+    present: 'vivo', preterite: 'viví', presentBack: 'yo: vivo', preteriteBack: 'yo: viví',
+    presentFront: 'Conjugate vivir in present (regular -ir)',
+    preteriteFront: 'Conjugate vivir in preterite (regular -ir)',
+    presentKey: 'ir-regular-present', preteriteKey: 'ir-regular-preterite',
+  },
+  {
+    spanish: ' \thablar\n', ending: 'ar' as const,
+    present: 'hablo', preterite: 'hablé', presentBack: 'yo: hablo', preteriteBack: 'yo: hablé',
+    presentFront: 'Conjugate  \thablar\n in present (regular -ar)',
+    preteriteFront: 'Conjugate  \thablar\n in preterite (regular -ar)',
+    presentKey: 'ar-regular-present', preteriteKey: 'ar-regular-preterite',
+  },
+])('keeps conjugation cards and claims for the eligible verb $spanish', (fixture) => {
+  const info: WordInfo = {
+    ...regularVerb, spanish: fixture.spanish,
+    conjugations: { present: { yo: fixture.present }, preterite: { yo: fixture.preterite } },
+    conjugationClass: { ending: fixture.ending, present: 'regular', preterite: 'regular' },
+  };
+
+  expect(conjugationCards(info, new Set())).toEqual({
+    cards: [
+      {
+        deck: 'Spanish::Conjugation', kind: 'conjugation',
+        front: fixture.presentFront, back: fixture.presentBack, tags: ['auto-generated'],
+      },
+      {
+        deck: 'Spanish::Conjugation', kind: 'conjugation',
+        front: fixture.preteriteFront, back: fixture.preteriteBack, tags: ['auto-generated'],
+      },
+    ],
+    claims: [
+      { front: fixture.presentFront, key: fixture.presentKey },
+      { front: fixture.preteriteFront, key: fixture.preteriteKey },
+    ],
+  });
+});
+
+test.each([
+  { spanish: 'oír', ending: 'ir' as const, form: 'oigo', back: 'yo: oigo',
+    front: 'Conjugate oír in present (regular -ir)', key: 'ir-regular-present' },
+  { spanish: 'reír', ending: 'ir' as const, form: 'río', back: 'yo: río',
+    front: 'Conjugate reír in present (regular -ir)', key: 'ir-regular-present' },
+  { spanish: 'levantarse', ending: 'ar' as const, form: 'me levanto', back: 'yo: me levanto',
+    front: 'Conjugate levantarse in present (regular -ar)', key: 'ar-regular-present' },
+  { spanish: 'levantarme', ending: 'ar' as const, form: 'me levanto', back: 'yo: me levanto',
+    front: 'Conjugate levantarme in present (regular -ar)', key: 'ar-regular-present' },
+  { spanish: 'comerlo', ending: 'er' as const, form: 'lo como', back: 'yo: lo como',
+    front: 'Conjugate comerlo in present (regular -er)', key: 'er-regular-present' },
+  { spanish: 'dármelo', ending: 'ar' as const, form: 'me lo doy', back: 'yo: me lo doy',
+    front: 'Conjugate dármelo in present (regular -ar)', key: 'ar-regular-present' },
+  { spanish: 'ir', ending: 'ir' as const, form: 'voy', back: 'yo: voy',
+    front: 'Conjugate ir in present (regular -ir)', key: 'ir-regular-present' },
+  { spanish: 'ser', ending: 'er' as const, form: 'soy', back: 'yo: soy',
+    front: 'Conjugate ser in present (regular -er)', key: 'er-regular-present' },
+  { spanish: 'COMER', ending: 'er' as const, form: 'COMO', back: 'yo: COMO',
+    front: 'Conjugate COMER in present (regular -er)', key: 'er-regular-present' },
+  { spanish: 'OI\u0301R', ending: 'ir' as const, form: 'OIGO', back: 'yo: OIGO',
+    front: 'Conjugate OI\u0301R in present (regular -ir)', key: 'ir-regular-present' },
+])('whole-token gate keeps cards, claims and original spelling for $spanish', (fixture) => {
+  const info = WordInfoSchema.parse({
+    ...regularVerb, spanish: fixture.spanish,
+    conjugations: { present: { yo: fixture.form } },
+    conjugationClass: { ending: fixture.ending, present: 'regular', preterite: 'regular' },
+  });
+  const result = conjugationCards(info, new Set());
+
+  expect(result.cards.map(({ front, back }) => ({ front, back }))).toEqual([
+    { front: fixture.front, back: fixture.back },
+  ]);
+  expect(result.claims).toEqual([{ front: fixture.front, key: fixture.key }]);
+  expect(generateCards(info).map((card) => card.back)).toEqual([fixture.spanish]);
+  expect(info.spanish).toBe(fixture.spanish);
+});
+
+test('whole-token gate accepts every locked pronoun and up to three attached pronouns', () => {
+  const fixtures = [
+    { spanish: 'verme', front: 'Conjugate verme in present (regular -er)' },
+    { spanish: 'verte', front: 'Conjugate verte in present (regular -er)' },
+    { spanish: 'verse', front: 'Conjugate verse in present (regular -er)' },
+    { spanish: 'vernos', front: 'Conjugate vernos in present (regular -er)' },
+    { spanish: 'veros', front: 'Conjugate veros in present (regular -er)' },
+    { spanish: 'verlo', front: 'Conjugate verlo in present (regular -er)' },
+    { spanish: 'verla', front: 'Conjugate verla in present (regular -er)' },
+    { spanish: 'verlos', front: 'Conjugate verlos in present (regular -er)' },
+    { spanish: 'verlas', front: 'Conjugate verlas in present (regular -er)' },
+    { spanish: 'verle', front: 'Conjugate verle in present (regular -er)' },
+    { spanish: 'verles', front: 'Conjugate verles in present (regular -er)' },
+    { spanish: 'comértemelo', front: 'Conjugate comértemelo in present (regular -er)' },
+  ];
+  for (const { spanish, front } of fixtures) {
+    const info = WordInfoSchema.parse({
+      ...regularVerb, spanish, conjugations: { present: { yo: 'fixture' } },
+      conjugationClass: { ending: 'er', present: 'regular', preterite: 'regular' },
+    });
+
+    expect(conjugationCards(info, new Set())).toEqual({
+      cards: [{ deck: 'Spanish::Conjugation', kind: 'conjugation', front,
+        back: 'yo: fixture', tags: ['auto-generated'] }],
+      claims: [{ front, key: 'er-regular-present' }],
+    });
+  }
+});
+
+test.each([
+  { spanish: 'comer', ending: 'ar' as const, message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.' },
+  { spanish: 'comerlo', ending: 'ar' as const, message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.' },
+  { spanish: 'Nos gusta', ending: 'ar' as const, message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.' },
+  { spanish: '1comer', ending: 'er' as const, message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -er.' },
+  { spanish: 'hablar-comer', ending: 'er' as const, message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -er.' },
+  { spanish: 'comer!', ending: 'er' as const, message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -er.' },
+  { spanish: 'comerlesx', ending: 'er' as const, message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -er.' },
+  { spanish: 'comermetelose', ending: 'er' as const, message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -er.' },
+])('whole-token gate rejects $spanish carrying ending $ending without any claim', ({ spanish, ending, message }) => {
+  const info = WordInfoSchema.parse({
+    ...regularVerb, spanish,
+    conjugationClass: { ending, present: 'regular', preterite: 'regular' },
+  });
+
+  expect(conjugationCards(info, new Set())).toEqual({ cards: [], claims: [], message });
+});
+
+test('whole-token gate accepts hazmerreír with an unknown type as the locked spelling-only limit', () => {
+  const info = WordInfoSchema.parse({
+    ...regularVerb, spanish: 'hazmerreír', type: 'unrecognised',
+    conjugations: { present: { yo: 'fixture' } },
+    conjugationClass: { ending: 'ir', present: 'regular', preterite: 'regular' },
+  });
+
+  expect(conjugationCards(info, new Set())).toEqual({
+    cards: [{ deck: 'Spanish::Conjugation', kind: 'conjugation',
+      front: 'Conjugate hazmerreír in present (regular -ir)', back: 'yo: fixture', tags: ['auto-generated'] }],
+    claims: [{ front: 'Conjugate hazmerreír in present (regular -ir)', key: 'ir-regular-present' }],
+  });
+  expect(conjugationCards({ ...info, type: 'noun' }, new Set())).toEqual({
+    cards: [], claims: [], message: '0 conjugation cards: lookup type "noun" is a known non-verb type.',
+  });
+});
 
 test('skips conjugations when classification exists without conjugations', () => {
   expect(conjugationCards({ ...regularVerb, conjugations: null }, new Set())).toEqual({

@@ -196,10 +196,13 @@ async function generateItem(
   const { vocabCards, conjugationCards: insertedConjugations, updatedCards } = await storeCards(
     db, wordId, voicedCards, conjugations.claims, foldedCardId,
   );
-  const counts = { vocabCards, conjugationCards: insertedConjugations };
-  if (updatedCards > 0) return { word, status: 'updated', ...counts };
-  if (vocabCards + insertedConjugations > 0) return { word, status: 'added', ...counts };
-  return { word, status: 'exists', ...counts };
+  const result = {
+    word, vocabCards, conjugationCards: insertedConjugations,
+    ...(conjugations.message === undefined ? {} : { message: conjugations.message }),
+  };
+  if (updatedCards > 0) return { status: 'updated', ...result };
+  if (vocabCards + insertedConjugations > 0) return { status: 'added', ...result };
+  return { status: 'exists', ...result };
 }
 
 export async function* generateForWordsEvents(

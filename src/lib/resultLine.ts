@@ -2,7 +2,6 @@ import type { WordResult } from '@/lib/types';
 
 export function formatResultLine(result: WordResult): string {
   if (result.status === 'error') return result.message;
-  if (result.status === 'exists') return 'already stored';
   if (result.status === 'skipped') return 'skipped: already stored';
   if (result.status === 'duplicate') return 'skipped: duplicate in this run';
 
@@ -13,10 +12,11 @@ export function formatResultLine(result: WordResult): string {
   if (result.conjugationCards > 0) {
     parts.push(`${result.conjugationCards} conjugation card${result.conjugationCards === 1 ? '' : 's'}`);
   }
-  const added = parts.join(' plus ');
-  if (result.status !== 'updated') return added;
-
-  const warning = 'updated: stored card changed; check Anki if this card was already sent';
-  if (parts.length === 0) return warning;
-  return `${added} added; ${warning}`;
+  let line = parts.join(' plus ');
+  if (result.status === 'exists') line = 'already stored';
+  if (result.status === 'updated') {
+    const warning = 'updated: stored card changed; check Anki if this card was already sent';
+    line = parts.length === 0 ? warning : `${line} added; ${warning}`;
+  }
+  return [line, result.message].filter(Boolean).join('; ');
 }
