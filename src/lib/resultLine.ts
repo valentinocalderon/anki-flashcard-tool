@@ -15,8 +15,8 @@ export function formatResultLine(result: WordResult): string {
   let line = parts.join(' plus ');
   if (result.status === 'exists') line = 'already stored';
   if (result.status === 'updated') {
-    const warning = 'updated: stored card changed; check Anki if this card was already sent';
-    line = parts.length === 0 ? warning : `${line} added; ${warning}`;
+    const warning = 'updated: stored card changed, check Anki if it was already sent';
+    line = parts.length === 0 ? warning : `${line} added · ${warning}`;
   }
-  return [line, result.message].filter(Boolean).join('; ');
+  return [line, result.message].filter(Boolean).join(' · ');
 }

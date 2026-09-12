@@ -455,9 +455,9 @@ test('reports a gated Spanish side or non-verb type without cards or claims', ()
   ];
 
   expect(infos.map((info) => conjugationCards(info, new Set()))).toEqual([
-    { cards: [], claims: [], message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.' },
-    { cards: [], claims: [], message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.' },
-    { cards: [], claims: [], message: '0 conjugation cards: lookup type "noun" is a known non-verb type.' },
+    { cards: [], claims: [], message: 'no conjugation cards: the Spanish side is not a usable infinitive' },
+    { cards: [], claims: [], message: 'no conjugation cards: the Spanish side is not a usable infinitive' },
+    { cards: [], claims: [], message: 'no conjugation cards: lookup type "noun" is a known non-verb type.' },
   ]);
 });
 
@@ -525,7 +525,7 @@ test.each(['Nos gusta', 'vamos a hablar', 'vamos\thablar', 'vamos\nhablar', 'vam
   (spanish) => {
     expect(conjugationCards({ ...regularVerb, spanish }, new Set())).toEqual({
       cards: [], claims: [],
-      message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.',
+      message: 'no conjugation cards: the Spanish side is not a usable infinitive',
     });
   },
 );
@@ -544,25 +544,25 @@ test.each([
       conjugationClass: { ending, present: 'regular', preterite: 'regular' },
     }, new Set())).toEqual({
       cards: [], claims: [],
-      message: '0 conjugation cards: lookup type "noun" is a known non-verb type.',
+      message: 'no conjugation cards: lookup type "noun" is a known non-verb type.',
     });
   },
 );
 
 test.each([
-  { type: 'noun', message: '0 conjugation cards: lookup type "noun" is a known non-verb type.' },
-  { type: 'adjective', message: '0 conjugation cards: lookup type "adjective" is a known non-verb type.' },
-  { type: 'adverb', message: '0 conjugation cards: lookup type "adverb" is a known non-verb type.' },
-  { type: 'pronoun', message: '0 conjugation cards: lookup type "pronoun" is a known non-verb type.' },
-  { type: 'preposition', message: '0 conjugation cards: lookup type "preposition" is a known non-verb type.' },
-  { type: 'conjunction', message: '0 conjugation cards: lookup type "conjunction" is a known non-verb type.' },
-  { type: 'interjection', message: '0 conjugation cards: lookup type "interjection" is a known non-verb type.' },
-  { type: 'article', message: '0 conjugation cards: lookup type "article" is a known non-verb type.' },
-  { type: 'determiner', message: '0 conjugation cards: lookup type "determiner" is a known non-verb type.' },
-  { type: 'number', message: '0 conjugation cards: lookup type "number" is a known non-verb type.' },
-  { type: 'phrase', message: '0 conjugation cards: lookup type "phrase" is a known non-verb type.' },
-  { type: 'expression', message: '0 conjugation cards: lookup type "expression" is a known non-verb type.' },
-  { type: ' \tNoUn\n', message: '0 conjugation cards: lookup type " \tNoUn\n" is a known non-verb type.' },
+  { type: 'noun', message: 'no conjugation cards: lookup type "noun" is a known non-verb type.' },
+  { type: 'adjective', message: 'no conjugation cards: lookup type "adjective" is a known non-verb type.' },
+  { type: 'adverb', message: 'no conjugation cards: lookup type "adverb" is a known non-verb type.' },
+  { type: 'pronoun', message: 'no conjugation cards: lookup type "pronoun" is a known non-verb type.' },
+  { type: 'preposition', message: 'no conjugation cards: lookup type "preposition" is a known non-verb type.' },
+  { type: 'conjunction', message: 'no conjugation cards: lookup type "conjunction" is a known non-verb type.' },
+  { type: 'interjection', message: 'no conjugation cards: lookup type "interjection" is a known non-verb type.' },
+  { type: 'article', message: 'no conjugation cards: lookup type "article" is a known non-verb type.' },
+  { type: 'determiner', message: 'no conjugation cards: lookup type "determiner" is a known non-verb type.' },
+  { type: 'number', message: 'no conjugation cards: lookup type "number" is a known non-verb type.' },
+  { type: 'phrase', message: 'no conjugation cards: lookup type "phrase" is a known non-verb type.' },
+  { type: 'expression', message: 'no conjugation cards: lookup type "expression" is a known non-verb type.' },
+  { type: ' \tNoUn\n', message: 'no conjugation cards: lookup type " \tNoUn\n" is a known non-verb type.' },
 ])('skips conjugation cards and claims for a known non-verb type on hablar: $type', ({ type, message }) => {
   expect(conjugationCards({ ...regularVerb, type }, new Set())).toEqual({ cards: [], claims: [], message });
 });
@@ -681,14 +681,14 @@ test('whole-token gate accepts every locked pronoun and up to three attached pro
 });
 
 test.each([
-  { spanish: 'comer', ending: 'ar' as const, message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.' },
-  { spanish: 'comerlo', ending: 'ar' as const, message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.' },
-  { spanish: 'Nos gusta', ending: 'ar' as const, message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.' },
-  { spanish: '1comer', ending: 'er' as const, message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -er.' },
-  { spanish: 'hablar-comer', ending: 'er' as const, message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -er.' },
-  { spanish: 'comer!', ending: 'er' as const, message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -er.' },
-  { spanish: 'comerlesx', ending: 'er' as const, message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -er.' },
-  { spanish: 'comermetelose', ending: 'er' as const, message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -er.' },
+  { spanish: 'comer', ending: 'ar' as const, message: 'no conjugation cards: the Spanish side is not a usable infinitive' },
+  { spanish: 'comerlo', ending: 'ar' as const, message: 'no conjugation cards: the Spanish side is not a usable infinitive' },
+  { spanish: 'Nos gusta', ending: 'ar' as const, message: 'no conjugation cards: the Spanish side is not a usable infinitive' },
+  { spanish: '1comer', ending: 'er' as const, message: 'no conjugation cards: the Spanish side is not a usable infinitive' },
+  { spanish: 'hablar-comer', ending: 'er' as const, message: 'no conjugation cards: the Spanish side is not a usable infinitive' },
+  { spanish: 'comer!', ending: 'er' as const, message: 'no conjugation cards: the Spanish side is not a usable infinitive' },
+  { spanish: 'comerlesx', ending: 'er' as const, message: 'no conjugation cards: the Spanish side is not a usable infinitive' },
+  { spanish: 'comermetelose', ending: 'er' as const, message: 'no conjugation cards: the Spanish side is not a usable infinitive' },
 ])('whole-token gate rejects $spanish carrying ending $ending without any claim', ({ spanish, ending, message }) => {
   const info = WordInfoSchema.parse({
     ...regularVerb, spanish,
@@ -711,7 +711,7 @@ test('whole-token gate accepts hazmerreír with an unknown type as the locked sp
     claims: [{ front: 'Conjugate hazmerreír in present (regular -ir)', key: 'ir-regular-present' }],
   });
   expect(conjugationCards({ ...info, type: 'noun' }, new Set())).toEqual({
-    cards: [], claims: [], message: '0 conjugation cards: lookup type "noun" is a known non-verb type.',
+    cards: [], claims: [], message: 'no conjugation cards: lookup type "noun" is a known non-verb type.',
   });
 });
 

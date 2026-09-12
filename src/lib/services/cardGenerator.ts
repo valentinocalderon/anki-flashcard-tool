@@ -113,13 +113,13 @@ export function conjugationCards(
   ) {
     return {
       cards, claims,
-      message: `0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -${classification.ending}.`,
+      message: 'no conjugation cards: the Spanish side is not a usable infinitive',
     };
   }
   if (wordInfo.type !== null && knownNonVerbTypes.has(wordInfo.type.trim().toLowerCase())) {
     return {
       cards, claims,
-      message: `0 conjugation cards: lookup type "${wordInfo.type}" is a known non-verb type.`,
+      message: `no conjugation cards: lookup type "${wordInfo.type}" is a known non-verb type.`,
     };
   }
 

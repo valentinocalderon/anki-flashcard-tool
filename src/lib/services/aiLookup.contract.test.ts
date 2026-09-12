@@ -291,10 +291,10 @@ test('generation reports a gated phrase and leaves its shared patterns for the n
 
   expect(phraseResult.results).toEqual([{
     word: 'Nos gusta', status: 'added', vocabCards: 2, conjugationCards: 0,
-    message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.',
+    message: 'no conjugation cards: the Spanish side is not a usable infinitive',
   }]);
   expect(phraseResult.results.map(formatResultLine)).toEqual([
-    '2 vocab cards; 0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.',
+    '2 vocab cards · no conjugation cards: the Spanish side is not a usable infinitive',
   ]);
   expect(await db.select({ deck: cards.deck, kind: cards.kind, front: cards.front, back: cards.back }).from(cards).orderBy(cards.id)).toEqual([
     { deck: 'Spanish::Vocab', kind: 'basic', front: 'we like', back: 'Nos gusta' },
@@ -366,10 +366,10 @@ test('generation reports an ending mismatch without claiming a pattern', async (
 
   expect(result.results).toEqual([{
     word: 'comer', status: 'added', vocabCards: 1, conjugationCards: 0,
-    message: '0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.',
+    message: 'no conjugation cards: the Spanish side is not a usable infinitive',
   }]);
   expect(result.results.map(formatResultLine)).toEqual([
-    '1 vocab card; 0 conjugation cards: Spanish side does not match a single infinitive with the classified ending -ar.',
+    '1 vocab card · no conjugation cards: the Spanish side is not a usable infinitive',
   ]);
   expect(await db.select({ kind: cards.kind, front: cards.front, back: cards.back }).from(cards)).toEqual([
     { kind: 'basic', front: 'to eat', back: 'comer' },

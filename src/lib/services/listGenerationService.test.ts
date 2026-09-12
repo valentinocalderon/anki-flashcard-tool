@@ -999,7 +999,7 @@ test.each([
     { word: 'casa / hogar', source: '/flashcards/test/packs/42', status: 'updated', vocabCards: 0, conjugationCards: 0 },
   ]);
   expect(renderToStaticMarkup(pageWithResults(results)).match(/<li\b[^>]*>.*?<\/li>/g)).toEqual([
-    '<li class="bg-gray-100 p-3 rounded"><span aria-hidden="true" class="text-xs mr-2">↻</span><strong>casa / hogar</strong>: updated: stored card changed; check Anki if this card was already sent</li>',
+    '<li class="bg-gray-100 p-3 rounded"><span aria-hidden="true" class="text-xs mr-2">↻</span><strong>casa / hogar</strong>: updated: stored card changed, check Anki if it was already sent</li>',
   ]);
   expect(lookup).toHaveBeenCalledExactlyOnceWith(remaining);
   expect(cached.mock.calls).toEqual([[db, 'casa', lookup], [db, 'hogar', lookup]]);
@@ -1423,7 +1423,7 @@ test('asks to check Anki if already sent and shows inserted counts when an item 
     'yo: hablé<br>tú: hablaste<br>él/ella: habló<br>nosotros: hablamos<br>vosotros: hablasteis<br>ellos: hablaron',
   ]);
   expect(renderToStaticMarkup(pageWithResults(results)).match(/<li\b[^>]*>.*?<\/li>/g)).toEqual([
-    '<li class="bg-gray-100 p-3 rounded"><span aria-hidden="true" class="text-xs mr-2">↻</span><strong>hablar / platicar</strong>: 2 conjugation cards added; updated: stored card changed; check Anki if this card was already sent</li>',
+    '<li class="bg-gray-100 p-3 rounded"><span aria-hidden="true" class="text-xs mr-2">↻</span><strong>hablar / platicar</strong>: 2 conjugation cards added · updated: stored card changed, check Anki if it was already sent</li>',
   ]);
 });
 
@@ -1703,10 +1703,10 @@ test('reports a gated word alongside its vocab cards', async () => {
 
   expect(result.results).toEqual([{
     word: 'lugar', status: 'added', vocabCards: 1, conjugationCards: 0,
-    message: '0 conjugation cards: lookup type "noun" is a known non-verb type.',
+    message: 'no conjugation cards: lookup type "noun" is a known non-verb type.',
   }]);
   expect(result.results.map(formatResultLine)).toEqual([
-    '1 vocab card; 0 conjugation cards: lookup type "noun" is a known non-verb type.',
+    '1 vocab card · no conjugation cards: lookup type "noun" is a known non-verb type.',
   ]);
   expect(await db.select({ kind: cards.kind, front: cards.front, back: cards.back }).from(cards)).toEqual([
     { kind: 'basic', front: 'place', back: 'lugar' },
@@ -1715,8 +1715,8 @@ test('reports a gated word alongside its vocab cards', async () => {
 });
 
 test.each([
-  { outcome: 'exists', side: 'lugar', query: 'sitio', expected: 'already stored; 0 conjugation cards: lookup type "noun" is a known non-verb type.' },
-  { outcome: 'updated', side: 'lugar / sitio', query: 'lugar', expected: 'updated: stored card changed; check Anki if this card was already sent; 0 conjugation cards: lookup type "noun" is a known non-verb type.' },
+  { outcome: 'exists', side: 'lugar', query: 'sitio', expected: 'already stored · no conjugation cards: lookup type "noun" is a known non-verb type.' },
+  { outcome: 'updated', side: 'lugar / sitio', query: 'lugar', expected: 'updated: stored card changed, check Anki if it was already sent · no conjugation cards: lookup type "noun" is a known non-verb type.' },
 ])('reports a gated word when its vocab card is $outcome', async ({ outcome, side, query, expected }) => {
   const info: WordInfo = { ...regularVerb, english: 'place', spanish: 'lugar', type: 'noun' };
   await db.insert(words).values({ id: 1, query, info: JSON.stringify(info), lookedUpAt: 123 });
@@ -1731,7 +1731,7 @@ test.each([
 
   expect(result.results).toEqual([{
     word: side, source: '/flashcards/test/packs/42', status: outcome, vocabCards: 0, conjugationCards: 0,
-    message: '0 conjugation cards: lookup type "noun" is a known non-verb type.',
+    message: 'no conjugation cards: lookup type "noun" is a known non-verb type.',
   }]);
   expect(result.results.map(formatResultLine)).toEqual([expected]);
   expect(await db.select({ id: cards.id, kind: cards.kind, back: cards.back, ankiNoteId: cards.ankiNoteId, sentAt: cards.sentAt }).from(cards)).toEqual([
