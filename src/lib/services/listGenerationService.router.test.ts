@@ -475,7 +475,7 @@ test.each(['sendPending', 'retryDeclined'] as const)(
       { text: 'la casa', model_id: 'eleven_multilingual_v2' },
       { action: 'storeMediaFile', version: 6, params: { filename: houseAudio, data: 'SQ==' } },
       { action: 'updateNoteFields', version: 6, params: { note: {
-        id: 101, fields: { Back: 'la casa [sound:house.mp3]' },
+        id: 101, fields: { Back: 'la casa<br>[sound:house.mp3]' },
       } } },
     ]);
     expect(await db.select({ id: cards.id, sentAt: cards.sentAt, audioSentAt: cards.audioSentAt })
@@ -538,7 +538,7 @@ test('retryDeclined sends a previously declined card without cached audio and ba
     { text: 'la casa', model_id: 'eleven_multilingual_v2' },
     { action: 'storeMediaFile', version: 6, params: { filename: houseAudio, data: 'SQ==' } },
     { action: 'updateNoteFields', version: 6, params: { note: {
-      id: 101, fields: { Back: 'la casa [sound:house.mp3]' },
+      id: 101, fields: { Back: 'la casa<br>[sound:house.mp3]' },
     } } },
   ]);
   expect(await db.select().from(cards).get()).toEqual({
@@ -571,7 +571,7 @@ test.each(['generateFromList', 'sendPending', 'retryDeclined'] as const)(
       { text: 'la casa', model_id: 'eleven_multilingual_v2' },
       { action: 'storeMediaFile', version: 6, params: { filename: houseAudio, data: 'SQ==' } },
       { action: 'updateNoteFields', version: 6, params: { note: {
-        id: 101, fields: { Back: 'la casa [sound:house.mp3]' },
+        id: 101, fields: { Back: 'la casa<br>[sound:house.mp3]' },
       } } },
     ]);
     expect(await run()).toEqual({
@@ -595,7 +595,7 @@ test.each(['generateFromList', 'sendPending', 'retryDeclined'] as const)(
     expect(requestBodies().slice(3)).toEqual([
       { action: 'storeMediaFile', version: 6, params: { filename: 'changed.mp3', data: 'RA==' } },
       { action: 'updateNoteFields', version: 6, params: { note: {
-        id: 101, fields: { Back: 'la casa / el hogar [sound:changed-stored.mp3]' },
+        id: 101, fields: { Back: 'la casa / el hogar<br>[sound:changed-stored.mp3]' },
       } } },
     ]);
     expect(await db.select({ sentAt: cards.sentAt, audioSentAt: cards.audioSentAt }).from(cards).get())
@@ -698,11 +698,11 @@ test('the first post-migration pass counts cached audio already in Anki and does
   expect(requestBodies()).toEqual([
     { action: 'storeMediaFile', version: 6, params: { filename: 'old.mp3', data: 'SQ==' } },
     { action: 'updateNoteFields', version: 6, params: { note: {
-      id: 101, fields: { Back: 'la casa [sound:old.mp3]' },
+      id: 101, fields: { Back: 'la casa<br>[sound:old.mp3]' },
     } } },
     { action: 'storeMediaFile', version: 6, params: { filename: 'old-second.mp3', data: 'RA==' } },
     { action: 'updateNoteFields', version: 6, params: { note: {
-      id: 102, fields: { Back: 'la casa [sound:old-second.mp3]' },
+      id: 102, fields: { Back: 'la casa<br>[sound:old-second.mp3]' },
     } } },
   ]);
   expect(await db.select({ id: cards.id, sentAt: cards.sentAt, audioSentAt: cards.audioSentAt })
@@ -813,7 +813,7 @@ test('backfillAudio voices only sent cards and uses a fresh voice for the next r
   expect(requestBodies()).toEqual([
     { text: 'la casa', model_id: 'eleven_multilingual_v2' },
     { action: 'storeMediaFile', version: 6, params: { filename: houseAudio, data: 'SQ==' } },
-    { action: 'updateNoteFields', version: 6, params: { note: { id: 101, fields: { Back: 'la casa [sound:house.mp3]' } } } },
+    { action: 'updateNoteFields', version: 6, params: { note: { id: 101, fields: { Back: 'la casa<br>[sound:house.mp3]' } } } },
   ]);
   expect(await caller.backfillAudio()).toEqual({ capReached: false,
     backfill: { status: 'nothing', sent: 0, rejected: 0, awaitingAudio: 0, unspeakable: 0, message: null, failureStage: null },

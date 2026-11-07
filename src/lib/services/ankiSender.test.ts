@@ -86,9 +86,9 @@ afterEach(() => {
 });
 
 test.each([
-  { id: 10, kind: 'basic', backs: ['la casa [sound:stored.mp3]', 'casa (house)', 'yo: hablo'] },
-  { id: 20, kind: 'example', backs: ['la casa', 'casa (house) [sound:stored.mp3]', 'yo: hablo'] },
-  { id: 30, kind: 'conjugation', backs: ['la casa', 'casa (house)', 'yo: hablo [sound:stored.mp3]'] },
+  { id: 10, kind: 'basic', backs: ['la casa<br>[sound:stored.mp3]', 'casa (house)', 'yo: hablo'] },
+  { id: 20, kind: 'example', backs: ['la casa', 'casa (house)<br>[sound:stored.mp3]', 'yo: hablo'] },
+  { id: 30, kind: 'conjugation', backs: ['la casa', 'casa (house)', 'yo: hablo<br>[sound:stored.mp3]'] },
 ])('uploads cached $kind audio before addNotes and uses the returned filename on Back', async ({ id, backs }) => {
   await db.update(cards).set({ audioFile: 'cached.mp3', audioMp3: Buffer.from([73, 68, 51, 0, 255]) })
     .where(inArray(cards.id, [id, 15, 25]));
@@ -692,7 +692,7 @@ test.each(['not JSON', '[1]', '{}'])(
 
 test.each([
   { cached: false, back: 'casa (house)<br>(The house is big.)' },
-  { cached: true, back: 'casa (house)<br>(The house is big.) [sound:stored.mp3]' },
+  { cached: true, back: 'casa (house)<br>(The house is big.)<br>[sound:stored.mp3]' },
 ])('fresh sendPending preserves the example br Back with cached audio: $cached', async ({ cached, back }) => {
   await db.update(cards).set({
     back: 'casa (house)<br>(The house is big.)',

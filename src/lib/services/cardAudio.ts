@@ -13,12 +13,13 @@ function spanishText(back: string): string {
   return back
     .replace(/<!--[\s\S]*?-->|<(?:"[^"]*"|'[^']*'|[^'">])*>/g, (tag) => {
       if (tag !== '<br>') throw new CardAudioError('tag', tag);
-      return ' ';
+      return '. ';
     })
     .replace(/&(#(?:x[\da-f]+|\d+);?|[a-z][a-z\d]*;?)/gi, (entity) => {
       throw new CardAudioError('entity', entity);
     })
     .replace(/\([^)]*(?:\)|$)/g, ' ')
+    .replace(/\s+\./g, '.')
     // Folded alternatives use a spaced slash; preserve conjugation pronouns such as él/ella.
     .replace(/\s+\/\s+/g, ' ')
     .replace(/\s+/g, ' ').trim();

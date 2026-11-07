@@ -49,7 +49,7 @@ export async function sendPending(db: Db, client: AnkiClient): Promise<SendRepor
       const card = pending[index];
       if (card?.audioFile && card.audioMp3) {
         const filename = await client.storeMediaFile(card.audioFile, card.audioMp3);
-        note.fields.Back += ` [sound:${filename}]`;
+        note.fields.Back += `<br>[sound:${filename}]`;
       }
     }
     results = await client.addNotes(notes);

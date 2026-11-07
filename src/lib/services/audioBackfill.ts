@@ -75,7 +75,7 @@ export async function backfillSentAudio(
       stage = 'storeMediaFile';
       const filename = await client.storeMediaFile(audioFile, audioMp3);
       stage = 'updateNoteFields';
-      await client.updateNoteFields(card.ankiNoteId, { Back: `${card.back} [sound:${filename}]` });
+      await client.updateNoteFields(card.ankiNoteId, { Back: `${card.back}<br>[sound:${filename}]` });
       stage = 'markAudioSent';
       await db.update(cards).set({ audioSentAt: Date.now() }).where(eq(cards.id, card.id));
     } catch (error) {

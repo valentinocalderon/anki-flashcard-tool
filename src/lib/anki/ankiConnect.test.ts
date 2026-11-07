@@ -43,9 +43,9 @@ const actions: {
     invoke: (client) => client.storeMediaFile('casa.mp3', Buffer.from([73, 68, 51, 0, 255])),
   },
   {
-    action: 'updateNoteFields', params: { note: { id: 456, fields: { Back: 'la casa [sound:casa.mp3]' } } },
+    action: 'updateNoteFields', params: { note: { id: 456, fields: { Back: 'la casa<br>[sound:casa.mp3]' } } },
     result: null, expected: undefined,
-    invoke: (client) => client.updateNoteFields(456, { Back: 'la casa [sound:casa.mp3]' }),
+    invoke: (client) => client.updateNoteFields(456, { Back: 'la casa<br>[sound:casa.mp3]' }),
   },
   {
     action: 'sync', params: {}, result: null, expected: undefined,

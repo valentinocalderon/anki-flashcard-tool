@@ -2056,10 +2056,10 @@ test('voice wiring voices every stored kind under the cap with the injected fetc
 
   expect(fetchImpl.mock.calls.map(([url, init]) => [url, init?.body])).toEqual([
     ['https://api.elevenlabs.io/v1/text-to-speech/test-voice-id?output_format=mp3_44100_128', '{"text":"la casa","model_id":"eleven_multilingual_v2"}'],
-    ['https://api.elevenlabs.io/v1/text-to-speech/test-voice-id?output_format=mp3_44100_128', '{"text":"casa","model_id":"eleven_multilingual_v2"}'],
+    ['https://api.elevenlabs.io/v1/text-to-speech/test-voice-id?output_format=mp3_44100_128', '{"text":"casa.","model_id":"eleven_multilingual_v2"}'],
     ['https://api.elevenlabs.io/v1/text-to-speech/test-voice-id?output_format=mp3_44100_128', '{"text":"hablar","model_id":"eleven_multilingual_v2"}'],
-    ['https://api.elevenlabs.io/v1/text-to-speech/test-voice-id?output_format=mp3_44100_128', '{"text":"yo: hablo tú: hablas él/ella: habla nosotros: hablamos vosotros: habláis ellos: hablan","model_id":"eleven_multilingual_v2"}'],
-    ['https://api.elevenlabs.io/v1/text-to-speech/test-voice-id?output_format=mp3_44100_128', '{"text":"yo: hablé tú: hablaste él/ella: habló nosotros: hablamos vosotros: hablasteis ellos: hablaron","model_id":"eleven_multilingual_v2"}'],
+    ['https://api.elevenlabs.io/v1/text-to-speech/test-voice-id?output_format=mp3_44100_128', '{"text":"yo: hablo. tú: hablas. él/ella: habla. nosotros: hablamos. vosotros: habláis. ellos: hablan","model_id":"eleven_multilingual_v2"}'],
+    ['https://api.elevenlabs.io/v1/text-to-speech/test-voice-id?output_format=mp3_44100_128', '{"text":"yo: hablé. tú: hablaste. él/ella: habló. nosotros: hablamos. vosotros: hablasteis. ellos: hablaron","model_id":"eleven_multilingual_v2"}'],
   ]);
   expect(await db.select({ kind: cards.kind, audioFile: cards.audioFile, audioMp3: cards.audioMp3 })
     .from(cards).orderBy(cards.id)).toEqual([

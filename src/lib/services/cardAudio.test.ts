@@ -34,7 +34,7 @@ test.each([
   {
     card: example,
     expected: {
-      text: 'casa',
+      text: 'casa.',
       audioFile: 'card-4c344c79b718a77c9b2bf1afebdd12740e1959784d43c22a867bbcb85d9e74bb.mp3',
     },
   },
@@ -48,12 +48,33 @@ test.each([
   {
     card: conjugation,
     expected: {
-      text: 'yo: hablo tú: hablas él/ella: habla nosotros: hablamos vosotros: habláis ellos: hablan',
+      text: 'yo: hablo. tú: hablas. él/ella: habla. nosotros: hablamos. vosotros: habláis. ellos: hablan',
       audioFile: 'card-c601592f902a214434a7a704ad2f32fbbe719057a47ea3c26506cc66eb97ccf1.mp3',
     },
   },
 ])('prepares a stored $card.kind card for speech and media', ({ card, expected }) => {
   expect(cardAudio(card)).toEqual(expected);
+});
+
+test.each([
+  {
+    back: 'yo: tuve<br>tú: tuviste',
+    expected: 'yo: tuve. tú: tuviste',
+  },
+  {
+    back: 'yo: tuve<br>tú: tuviste<br>él/ella: tuvo<br>nosotros: tuvimos<br>vosotros: tuvisteis<br>ellos: tuvieron',
+    expected: 'yo: tuve. tú: tuviste. él/ella: tuvo. nosotros: tuvimos. vosotros: tuvisteis. ellos: tuvieron',
+  },
+])('pauses at each line break in the tener preterite back observed on 2026-09-12: $back', ({ back, expected }) => {
+  const { text } = cardAudio({
+    ...conjugation, front: 'Conjugate tener in preterite (irregular)', back,
+  });
+  expect(text).toBe(expected);
+  expect(text).not.toContain('..');
+});
+
+test('keeps vocab speech unchanged when its back has no <br>', () => {
+  expect(cardAudio(basic).text).toBe('la casa');
 });
 
 const word: WordInfo = {
@@ -63,7 +84,7 @@ const word: WordInfo = {
 
 test('speaks only Spanish for generated basic and example cards', () => {
   expect(generateCards(word).map((card) => cardAudio(card).text)).toEqual([
-    'la casa', 'casa',
+    'la casa', 'casa.',
   ]);
   expect(generateCards({
     ...word, spanish: '¡adiós!', english: 'goodbye', article: null,
@@ -75,7 +96,7 @@ test('speaks only Spanish for generated basic and example cards', () => {
     ...word, spanish: 'tener', english: 'to have', article: null, type: 'verb',
     example: 'Tengo un pingüino. (I have a penguin.)', exampleWord: 'Tengo',
   }).map((card) => cardAudio(card).text)).toEqual([
-    'tener', 'Tengo',
+    'tener', 'Tengo.',
   ]);
   expect(generateCards({
     ...word, spanish: 'oír', english: 'to hear', article: null, type: 'verb',
@@ -89,7 +110,7 @@ test('speaks only Spanish for generated single and multiple forms', () => {
   expect(generateCards({ forms: [
     { spanish: 'la casa', query: 'casa', info: word },
   ] }).map((card) => cardAudio(card).text)).toEqual([
-    'la casa', 'casa',
+    'la casa', 'casa.',
   ]);
   expect(generateCards({ forms: [
     { spanish: '¡adiós!', query: 'adiós', info: { ...word, english: 'goodbye' } },
@@ -100,9 +121,9 @@ test('speaks only Spanish for generated single and multiple forms', () => {
 test.each([basic, example, folded, conjugation])('cleans HTML, every parenthetical and folded separators before normalizing $kind speech', (card) => {
   expect(cardAudio({
     ...card, back: ' \tcasa (house)\n<br>(The house\nis big.)\t /\u00a0hogar (home)<br>/ vivienda (dwelling)  ',
-  }).text).toBe('casa hogar vivienda');
+  }).text).toBe('casa. hogar. vivienda');
   expect(cardAudio({ ...card, back: 'casa (house) (The house is big.)' }).text).toBe('casa');
-  expect(cardAudio({ ...card, back: 'casa (house)<br>(The house is big' }).text).toBe('casa');
+  expect(cardAudio({ ...card, back: 'casa (house)<br>(The house is big' }).text).toBe('casa.');
 });
 
 test('preserves literal speech for both generated conjugation tenses and pronoun order', () => {
@@ -121,15 +142,15 @@ test('preserves literal speech for both generated conjugation tenses and pronoun
     },
   }, new Set());
   expect(generated.cards.map((card) => cardAudio(card).text)).toEqual([
-    'yo: hablo tú: hablas él/ella: habla nosotros: hablamos vosotros: habláis ellos: hablan',
-    'yo: hablé tú: hablaste él/ella: habló nosotros: hablamos vosotros: hablasteis ellos: hablaron',
+    'yo: hablo. tú: hablas. él/ella: habla. nosotros: hablamos. vosotros: habláis. ellos: hablan',
+    'yo: hablé. tú: hablaste. él/ella: habló. nosotros: hablamos. vosotros: hablasteis. ellos: hablaron',
   ]);
 });
 
 test('preserves Unicode bytes and the existing conjugation whitespace normalization', () => {
   expect(cardAudio({
     ...conjugation, back: ' \tyo: oigo\n<br>tú:\u00a0oyes<br>él/ella: oyó<br>nosotros: oímos<br>vosotros: oi\u0301s<br>ellos: oyen  ',
-  }).text).toBe('yo: oigo tú: oyes él/ella: oyó nosotros: oímos vosotros: oi\u0301s ellos: oyen');
+  }).text).toBe('yo: oigo. tú: oyes. él/ella: oyó. nosotros: oímos. vosotros: oi\u0301s. ellos: oyen');
   expect(cardAudio({
     ...conjugation, back: '¡ÁÉÍÓÚÜÑ áéíóúüñ! ¿sí? "sí" \'no\' & ella — … 😀',
   }).text).toBe('¡ÁÉÍÓÚÜÑ áéíóúüñ! ¿sí? "sí" \'no\' & ella — … 😀');

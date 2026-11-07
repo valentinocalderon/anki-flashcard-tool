@@ -78,7 +78,7 @@ test('voices a sent card, caches its bytes, uploads and updates Back, and pushes
   );
   expect(ankiFetch.mock.calls.map(([, init]) => requestBody(init))).toEqual([
     { action: 'storeMediaFile', version: 6, params: { filename: audioFile, data: 'SUQzAP8=' } },
-    { action: 'updateNoteFields', version: 6, params: { note: { id: 101, fields: { Back: 'la casa [sound:stored.mp3]' } } } },
+    { action: 'updateNoteFields', version: 6, params: { note: { id: 101, fields: { Back: 'la casa<br>[sound:stored.mp3]' } } } },
   ]);
   expect(await db.select().from(cards).get()).toEqual({
     ...storedHouse, audioFile, audioMp3: Buffer.from([73, 68, 51, 0, 255]), audioSentAt: 1800000000000,
@@ -111,9 +111,9 @@ test('pushes cached audio in id order without speech and excludes rows missing s
   expect(voiceFetch).not.toHaveBeenCalled();
   expect(ankiFetch.mock.calls.map(([, init]) => requestBody(init))).toEqual([
     { action: 'storeMediaFile', version: 6, params: { filename: 'first.mp3', data: 'SUQz' } },
-    { action: 'updateNoteFields', version: 6, params: { note: { id: 0, fields: { Back: 'la casa [sound:first-stored.mp3]' } } } },
+    { action: 'updateNoteFields', version: 6, params: { note: { id: 0, fields: { Back: 'la casa<br>[sound:first-stored.mp3]' } } } },
     { action: 'storeMediaFile', version: 6, params: { filename: 'second.mp3', data: 'AP8=' } },
-    { action: 'updateNoteFields', version: 6, params: { note: { id: 202, fields: { Back: 'la casa [sound:second-stored.mp3]' } } } },
+    { action: 'updateNoteFields', version: 6, params: { note: { id: 202, fields: { Back: 'la casa<br>[sound:second-stored.mp3]' } } } },
   ]);
   expect(await db.select({ id: cards.id, audioSentAt: cards.audioSentAt }).from(cards)
     .where(inArray(cards.id, [10, 20])).orderBy(cards.id)).toEqual([
@@ -126,16 +126,16 @@ test.each([
   {
     kind: 'conjugation' as const, deck: 'Spanish::Conjugation',
     front: 'Conjugate hablar in present (regular -ar)', back: 'yo: hablo<br>tú: hablas',
-    text: 'yo: hablo tú: hablas',
+    text: 'yo: hablo. tú: hablas',
     filename: 'card-c601592f902a214434a7a704ad2f32fbbe719057a47ea3c26506cc66eb97ccf1.mp3',
-    pushedBack: 'yo: hablo<br>tú: hablas [sound:stored.mp3]',
+    pushedBack: 'yo: hablo<br>tú: hablas<br>[sound:stored.mp3]',
   },
   {
     kind: 'example' as const, deck: 'Spanish::Vocab',
     front: 'La ____ es grande.', back: 'casa (house)<br>(The house is big.)',
-    text: 'casa',
+    text: 'casa.',
     filename: 'card-4c344c79b718a77c9b2bf1afebdd12740e1959784d43c22a867bbcb85d9e74bb.mp3',
-    pushedBack: 'casa (house)<br>(The house is big.) [sound:stored.mp3]',
+    pushedBack: 'casa (house)<br>(The house is big.)<br>[sound:stored.mp3]',
   },
 ])('speaks Spanish-only $kind text while pushing the stored HTML Back', async ({ kind, deck, front, back, text, filename, pushedBack }) => {
   await db.insert(cards).values({
@@ -193,9 +193,9 @@ test('shares the existing voice budget, pushes cached audio after cap denial, an
   expect(voiceFetch).toHaveBeenCalledTimes(2);
   expect(ankiFetch.mock.calls.map(([, init]) => requestBody(init))).toEqual([
     { action: 'storeMediaFile', version: 6, params: { filename: audioFile, data: 'SQ==' } },
-    { action: 'updateNoteFields', version: 6, params: { note: { id: 101, fields: { Back: 'la casa [sound:first.mp3]' } } } },
+    { action: 'updateNoteFields', version: 6, params: { note: { id: 101, fields: { Back: 'la casa<br>[sound:first.mp3]' } } } },
     { action: 'storeMediaFile', version: 6, params: { filename: 'cached.mp3', data: 'AP8=' } },
-    { action: 'updateNoteFields', version: 6, params: { note: { id: 404, fields: { Back: 'la casa [sound:cached-stored.mp3]' } } } },
+    { action: 'updateNoteFields', version: 6, params: { note: { id: 404, fields: { Back: 'la casa<br>[sound:cached-stored.mp3]' } } } },
   ]);
   expect(await db.select({ id: cards.id, audioSentAt: cards.audioSentAt }).from(cards).orderBy(cards.id)).toEqual([
     { id: 10, audioSentAt: 1800000000000 }, { id: 20, audioSentAt: null },
@@ -245,14 +245,14 @@ test('reports CardAudioError as unspeakable, pushes following cards, and retries
   });
   expect(voiceFetch).toHaveBeenCalledOnce();
   expect(requestBody(voiceFetch.mock.calls[0]?.[1])).toEqual({
-    text: 'yo: hablo tú: hablas', model_id: 'eleven_multilingual_v2',
+    text: 'yo: hablo. tú: hablas', model_id: 'eleven_multilingual_v2',
   });
   expect(ankiFetch.mock.calls.map(([, init]) => requestBody(init))).toEqual([
     { action: 'storeMediaFile', version: 6, params: { filename: 'cached.mp3', data: 'SQ==' } },
-    { action: 'updateNoteFields', version: 6, params: { note: { id: 202, fields: { Back: 'la casa [sound:cached.mp3]' } } } },
+    { action: 'updateNoteFields', version: 6, params: { note: { id: 202, fields: { Back: 'la casa<br>[sound:cached.mp3]' } } } },
     { action: 'storeMediaFile', version: 6, params: { filename: audioFile, data: 'RA==' } },
     { action: 'updateNoteFields', version: 6, params: { note: {
-      id: 101, fields: { Back: 'yo: hablo<br>tú: hablas [sound:retry.mp3]' },
+      id: 101, fields: { Back: 'yo: hablo<br>tú: hablas<br>[sound:retry.mp3]' },
     } } },
   ]);
   expect(await db.select().from(cards).orderBy(cards.id)).toEqual([
@@ -372,7 +372,7 @@ test.each(ankiRefusals.flatMap((failure) => ['storeMediaFile', 'updateNoteFields
     ]);
     expect(ankiFetch.mock.calls.slice(-2).map(([, init]) => requestBody(init))).toEqual([
       { action: 'storeMediaFile', version: 6, params: { filename: 'third.mp3', data: 'Mw==' } },
-      { action: 'updateNoteFields', version: 6, params: { note: { id: 303, fields: { Back: 'la casa [sound:third-stored.mp3]' } } } },
+      { action: 'updateNoteFields', version: 6, params: { note: { id: 303, fields: { Back: 'la casa<br>[sound:third-stored.mp3]' } } } },
     ]);
     expect(ankiFetch).toHaveBeenCalledTimes(action === 'storeMediaFile' ? 5 : 6);
     expect(voiceFetch).not.toHaveBeenCalled();
@@ -389,9 +389,9 @@ test.each(ankiRefusals.flatMap((failure) => ['storeMediaFile', 'updateNoteFields
     });
     expect(ankiFetch.mock.calls.map(([, init]) => requestBody(init))).toEqual([
       { action: 'storeMediaFile', version: 6, params: { filename: 'second.mp3', data: 'RA==' } },
-      { action: 'updateNoteFields', version: 6, params: { note: { id: 202, fields: { Back: 'la casa [sound:retry.mp3]' } } } },
+      { action: 'updateNoteFields', version: 6, params: { note: { id: 202, fields: { Back: 'la casa<br>[sound:retry.mp3]' } } } },
       { action: 'storeMediaFile', version: 6, params: { filename: 'fourth.mp3', data: 'AP8=' } },
-      { action: 'updateNoteFields', version: 6, params: { note: { id: 404, fields: { Back: 'la casa [sound:fourth-stored.mp3]' } } } },
+      { action: 'updateNoteFields', version: 6, params: { note: { id: 404, fields: { Back: 'la casa<br>[sound:fourth-stored.mp3]' } } } },
     ]);
     expect(await db.select().from(cards).orderBy(cards.id)).toEqual([
       { ...first, audioSentAt: 1800000000000 }, { ...refused, audioSentAt: 1800000001000 },
@@ -475,7 +475,7 @@ test.each(['storeMediaFile', 'updateNoteFields'])(
     expect(ankiFetch).toHaveBeenCalledTimes(action === 'storeMediaFile' ? 3 : 4);
     expect(requestBody(ankiFetch.mock.calls.at(-1)?.[1])).toEqual(action === 'storeMediaFile'
       ? { action: 'storeMediaFile', version: 6, params: { filename: 'third.mp3', data: 'RA==' } }
-      : { action: 'updateNoteFields', version: 6, params: { note: { id: 303, fields: { Back: 'la casa [sound:third-stored.mp3]' } } } });
+      : { action: 'updateNoteFields', version: 6, params: { note: { id: 303, fields: { Back: 'la casa<br>[sound:third-stored.mp3]' } } } });
   },
 );
 
@@ -529,7 +529,7 @@ test.each(ankiFailures.flatMap((failure) => ['storeMediaFile', 'updateNoteFields
     expect(await db.select().from(cards).where(inArray(cards.id, [20, 30])).orderBy(cards.id)).toEqual(before);
     expect(requestBody(ankiFetch.mock.calls.at(-1)?.[1])).toEqual(action === 'storeMediaFile'
       ? { action: 'storeMediaFile', version: 6, params: { filename: 'second.mp3', data: 'RA==' } }
-      : { action: 'updateNoteFields', version: 6, params: { note: { id: 202, fields: { Back: 'la casa [sound:second-stored.mp3]' } } } });
+      : { action: 'updateNoteFields', version: 6, params: { note: { id: 202, fields: { Back: 'la casa<br>[sound:second-stored.mp3]' } } } });
     expect(ankiFetch).toHaveBeenCalledTimes(action === 'storeMediaFile' ? 3 : 4);
     expect(voiceFetch).not.toHaveBeenCalled();
   },
@@ -592,10 +592,10 @@ test.each([
   ]);
   expect(ankiFetch.mock.calls.map(([, init]) => requestBody(init))).toEqual([
     { action: 'storeMediaFile', version: 6, params: { filename: 'cached.mp3', data: 'SQ==' } },
-    { action: 'updateNoteFields', version: 6, params: { note: { id: 101, fields: { Back: 'la casa [sound:stored.mp3]' } } } },
+    { action: 'updateNoteFields', version: 6, params: { note: { id: 101, fields: { Back: 'la casa<br>[sound:stored.mp3]' } } } },
     { action: 'storeMediaFile', version: 6, params: { filename: 'replacement.mp3', data: 'SUQz' } },
     { action: 'updateNoteFields', version: 6, params: { note: { id: 404, fields: {
-      Back: 'la casa / el hogar [sound:replacement-stored.mp3]',
+      Back: 'la casa / el hogar<br>[sound:replacement-stored.mp3]',
     } } } },
   ]);
   expect(voiceFetch).toHaveBeenCalledOnce();
@@ -641,7 +641,7 @@ test('pushes a sent card again when storeCards replaces its audio and clears the
   expect(ankiFetch.mock.calls.map(([, init]) => requestBody(init))).toEqual([
     { action: 'storeMediaFile', version: 6, params: { filename: 'replacement.mp3', data: 'SUQz' } },
     { action: 'updateNoteFields', version: 6, params: { note: { id: 101, fields: {
-      Back: 'la casa / el hogar [sound:replacement-stored.mp3]',
+      Back: 'la casa / el hogar<br>[sound:replacement-stored.mp3]',
     } } } },
   ]);
   expect(await db.select({ audioSentAt: cards.audioSentAt, sentAt: cards.sentAt }).from(cards).get())
@@ -692,7 +692,7 @@ test('voices and pushes a sent fold whose changed Back cleared old audio after c
   expect(ankiFetch.mock.calls.map(([, init]) => requestBody(init))).toEqual([
     { action: 'storeMediaFile', version: 6, params: { filename: audioFile, data: 'SUQ=' } },
     { action: 'updateNoteFields', version: 6, params: { note: { id: 101, fields: {
-      Back: 'la casa / el hogar [sound:folded.mp3]',
+      Back: 'la casa / el hogar<br>[sound:folded.mp3]',
     } } } },
   ]);
   expect(await db.select({
@@ -715,7 +715,7 @@ test('pushes conflict-filled audio on a sent row without another speech request'
     .toEqual({ status: 'sent', sent: 1, rejected: 0, awaitingAudio: 0, unspeakable: 0, failureStage: null, message: null });
   expect(ankiFetch.mock.calls.map(([, init]) => requestBody(init))).toEqual([
     { action: 'storeMediaFile', version: 6, params: { filename: 'filled.mp3', data: 'SUQ=' } },
-    { action: 'updateNoteFields', version: 6, params: { note: { id: 101, fields: { Back: 'la casa [sound:filled-stored.mp3]' } } } },
+    { action: 'updateNoteFields', version: 6, params: { note: { id: 101, fields: { Back: 'la casa<br>[sound:filled-stored.mp3]' } } } },
   ]);
   expect(await db.select().from(cards).get()).toEqual({
     ...storedHouse, audioFile: 'filled.mp3', audioMp3: Buffer.from([73, 68]), audioSentAt: 1800000000000,
@@ -779,7 +779,7 @@ test('reports a voice service failure after an unspeakable card while pushing ca
   expect(voiceFetch).toHaveBeenCalledOnce();
   expect(ankiFetch.mock.calls.map(([, init]) => requestBody(init))).toEqual([
     { action: 'storeMediaFile', version: 6, params: { filename: 'cached.mp3', data: 'SQ==' } },
-    { action: 'updateNoteFields', version: 6, params: { note: { id: 303, fields: { Back: 'la casa [sound:cached.mp3]' } } } },
+    { action: 'updateNoteFields', version: 6, params: { note: { id: 303, fields: { Back: 'la casa<br>[sound:cached.mp3]' } } } },
   ]);
 });
 
